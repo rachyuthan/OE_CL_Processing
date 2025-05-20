@@ -46,7 +46,7 @@ The YOLO labelling format maps a number to the class name using this YAML file. 
 2 0.3 0.3 0.5 0.5
 ```
 
-For more information check the YOLO documentation from Ultralytics
+For more information check the YOLO documentation from Ultralytics.
 Once the data is formatted into this way it is ready to be used for training.
 
 ## 2. Training
