@@ -967,7 +967,21 @@ def load_shapefiles_for_testing(crs, found_shp_file):
     return found_buildings, removed_buildings
 
 def classify_truth_boxes(truth_boxes):
-    """Separates truth boxes into points and regular boxes based on area"""
+    """
+    Separates truth boxes into points and regular boxes based on area
+    
+    Parameters
+    ----------
+    truth_boxes : numpy array
+        Array of truth bounding boxes in the format [x1, y1, x2, y2]
+    
+    Returns
+    -------
+    point_indices : list of int
+        List of indices of points
+    box_indices : list of int
+        List of indices of regular boxes
+    """
     point_indices = []
     box_indices = []
     
@@ -984,7 +998,26 @@ def classify_truth_boxes(truth_boxes):
     return point_indices, box_indices
 
 def find_box_point_pairs(truth_boxes, point_indices, box_indices):
-    """Identifies points that are close to boxes and should be considered together"""
+    """
+    Identifies points that are close to boxes and should be considered together. Ensures that points are not double-counted.
+    This function also removes points that are associated with boxes from the point_indices list so that only the box is counted.
+    
+    Parameters
+    ----------
+    truth_boxes : numpy array
+        Array of truth bounding boxes in the format [x1, y1, x2, y2]
+    point_indices : list of int
+        List of indices of points
+    box_indices : list of int
+        List of indices of regular boxes
+    
+    Returns
+    -------
+    box_point_pairs : dict
+        Dictionary mapping box indices to lists of point indices
+    remaining_points : list of int
+        List of point indices that are not associated with any box
+    """
     box_point_pairs = {}
     points_to_remove = set()
     
@@ -1012,7 +1045,29 @@ def find_box_point_pairs(truth_boxes, point_indices, box_indices):
     return box_point_pairs, remaining_points
 
 def match_box_point_pairs(box_point_pairs, truth_boxes, pred_boxes, matched_truths, matched_predictions, annotated_image):
-    """Process and match box-point pairs to predictions"""
+    """
+    Process and match box-point pairs to predictions
+    
+    Parameters
+    ----------
+    box_point_pairs : dict
+        Dictionary mapping box indices to lists of point indices
+    truth_boxes : numpy array
+        Array of truth bounding boxes in the format [x1, y1, x2, y2]
+    pred_boxes : numpy array
+        Array of predicted bounding boxes in the format [x1, y1, x2, y2]
+    matched_truths : set
+        Set of matched truth indices
+    matched_predictions : set
+        Set of matched prediction indices
+    annotated_image : numpy array
+        Annotated image for visualization
+    
+    Returns
+    -------
+    processed_pairs : set
+        Set of processed point indices
+    """
     processed_pairs = set()
     
     for b_idx, p_indices in box_point_pairs.items():
@@ -1055,7 +1110,24 @@ def match_box_point_pairs(box_point_pairs, truth_boxes, pred_boxes, matched_trut
     return processed_pairs
 
 def match_standalone_boxes(box_indices, truth_boxes, pred_boxes, matched_truths, matched_predictions, annotated_image):
-    """Match standalone boxes (no associated points) to predictions"""
+    """
+    Match standalone boxes (no associated points) to predictions
+    
+    Parameters
+    ----------
+    box_indices : list of int
+        List of indices of box indices
+    truth_boxes : numpy array
+        Array of truth bounding boxes in the format [x1, y1, x2, y2]
+    pred_boxes : numpy array
+        Array of predicted bounding boxes in the format [x1, y1, x2, y2]
+    matched_truths : set
+        Set of matched truth indices
+    matched_predictions : set
+        Set of matched prediction indices
+    annotated_image : numpy array
+        Annotated image for visualization
+    """
     for i in box_indices:
         if i in matched_truths:
             continue  # Skip already matched boxes
@@ -1092,7 +1164,31 @@ def match_standalone_boxes(box_indices, truth_boxes, pred_boxes, matched_truths,
 
 def find_potential_point_matches(point_indices, truth_boxes, pred_boxes, processed_pairs, 
                               matched_truths, matched_predictions, point_distance_tolerance):
-    """Find all potential matches between points and predictions"""
+    """
+    Find all potential matches between points and predictions
+    
+    Parameters
+    ----------
+    point_indices : list of int
+        List of indices of points
+    truth_boxes : numpy array
+        Array of truth bounding boxes in the format [x1, y1, x2, y2]
+    pred_boxes : numpy array
+        Array of predicted bounding boxes in the format [x1, y1, x2, y2]
+    processed_pairs : set
+        Set of processed point indices
+    matched_truths : set
+        Set of matched truth indices
+    matched_predictions : set
+        Set of matched prediction indices
+    point_distance_tolerance : float
+        Distance tolerance for matching points to predictions
+    
+    Returns
+    -------
+    point_to_pred_matches : dict
+        Dictionary mapping point indices to lists of potential prediction matches
+    """
     point_to_pred_matches = {}  # Maps point index to [(pred_idx, distance), ...]
 
     for i in point_indices:
@@ -1141,7 +1237,24 @@ def find_potential_point_matches(point_indices, truth_boxes, pred_boxes, process
     return point_to_pred_matches
 
 def assign_point_matches(point_matches, truth_boxes, pred_boxes, matched_truths, matched_predictions, annotated_image):
-    """Assign optimal matches between points and predictions"""
+    """Assign optimal matches between points and predictions currently based on distance
+    (Future: could be improved with more sophisticated matching criteria based on confidence scores)
+    
+    Parameters
+    ----------
+    point_matches : dict
+        Dictionary mapping point indices to lists of potential prediction matches
+    truth_boxes : numpy array
+        Array of truth bounding boxes in the format [x1, y1, x2, y2]
+    pred_boxes : numpy array
+        Array of predicted bounding boxes in the format [x1, y1, x2, y2]
+    matched_truths : set
+        Set of matched truth indices
+    matched_predictions : set
+        Set of matched prediction indices
+    annotated_image : numpy array
+        Annotated image for visualization
+    """
     # Sort all point indices by number of potential matches (ascending)
     sorted_points = sorted(point_matches.keys(), 
                         key=lambda x: len(point_matches[x]))
@@ -1190,7 +1303,33 @@ def assign_point_matches(point_matches, truth_boxes, pred_boxes, matched_truths,
 
 def process_removed_buildings(missed, removed_buildings, transform, inverse_transform, 
                            bounds_geo, pred_boxes, matched_predictions, annotated_image):
-    """Process removed buildings shapefile and mark missed detections"""
+    """
+    Process removed buildings shapefile and mark missed detections
+    
+    Parameters
+    ----------
+    missed : list of lists
+        List of missed building boxes in pixel coordinates [x1, y1, x2, y2]
+    removed_buildings : GeoDataFrame
+        GeoDataFrame of removed buildings
+    transform : pyproj.Transformer
+        Transformer for converting pixel coordinates to geographic coordinates
+    inverse_transform : pyproj.Transformer
+        Inverse transformer for converting geographic coordinates to pixel coordinates
+    bounds_geo : tuple
+        Geographic bounds of the image (left, bottom, right, top)
+    pred_boxes : list of lists
+        List of predicted building boxes in pixel coordinates [x1, y1, x2, y2]
+    matched_predictions : set
+        Set of matched prediction indices
+    annotated_image : numpy array
+        Annotated image for visualization
+    
+    Returns
+    -------
+    matching_indices : list of int
+        List of indices of missed boxes that match removed buildings
+    """
     # Create building geometries from missed buildings only
     missed_geoms = []
     for box in missed:  
@@ -1286,7 +1425,20 @@ def process_removed_buildings(missed, removed_buildings, transform, inverse_tran
     return matching_indices
 
 def check_prediction_intersection(geometry, pred_boxes, transform, matched_predictions):
-    """Check if a geometry intersects with any unmatched prediction"""
+    """
+    Check if a geometry intersects with any unmatched prediction
+    
+    Parameters
+    ----------
+    geometry : shapely.geometry
+        Geometry object to check for intersection
+    pred_boxes : list of lists
+        List of predicted bounding boxes in the format [x1, y1, x2, y2]
+    transform : pyproj.Transformer
+        Transformer for converting pixel coordinates to geographic coordinates
+    matched_predictions : set
+        Set of matched prediction indices
+    """
     for pred_idx, pred_box in enumerate(pred_boxes):
         if pred_idx in matched_predictions:
             continue  # Skip already matched predictions
@@ -1938,7 +2090,7 @@ def sliding_window_detection(
     """
     Perform object detection using a sliding window approach with an ensemble of models.
     
-    Parameters:
+    Parameters
     -----------
     models : list
         List of detection models (ensemble from k-fold cross validation)
@@ -1955,7 +2107,7 @@ def sliding_window_detection(
     debug : bool
         Whether to save debug images
         
-    Returns:
+    Returns
     --------
     all_final_boxes : list of lists
         List of detection boxes for each image
