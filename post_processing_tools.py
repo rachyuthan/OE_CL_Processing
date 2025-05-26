@@ -43,11 +43,11 @@ def load_models(model_type, model_version):
         
     """
     if model_type == 'yolo':
-        model = YOLO("/home/rithvik/YOLO/test_runs/detect/BHE_YOLO/weights/best.pt")
+        model = YOLO("/home/rithvik/YOLO/test_runs/detect/BHE_YOLO/weights/best.pt") #change to correct directory
         return [model]  # Return as list for consistent handling
     elif model_type == 'kfolds':
         k_fold_models = []
-        model_dir = Path(f"/home/rithvik/YOLO/k_folds_cross_val_{model_version}")
+        model_dir = Path(f"./k_folds_cross_val_{model_version}") #change to correct directory
 
         for k in range(5):
             model_path = model_dir / "reretrained" / f"split_{k+1}" / "weights" / "best.pt"
@@ -115,7 +115,7 @@ def generate_predictions(models, image_files, output_dir, model_type, conf_thres
             
         # Get predictions based on model type
         if model_type == 'rcnn':
-            rcnn_pred_path = Path('/home/rithvik/mmrotate-OE/work_dirs/BHE_results/labels') / f"{img_path.stem}.txt"
+            rcnn_pred_path = Path('/home/rithvik/mmrotate-OE/work_dirs/BHE_results/labels') / f"{img_path.stem}.txt" #change to correct directory if it exists
             pred_boxes = load_boxes(rcnn_pred_path)
         else:  # yolo or kfolds
             all_boxes = []
@@ -552,7 +552,8 @@ def post_processing_analysis(pred_path, truth_path, image_path, output_dir, pipe
     # Phase 4: Match standalone points
     point_matches = find_potential_point_matches(
         point_indices, truth_boxes, pred_boxes,
-        processed_pairs, matched_truths, matched_predictions, point_distance_tolerance
+        processed_pairs, matched_truths, matched_predictions, point_distance_tolerance,
+        pred_confidences=pred_confidences  # Pass pred_confidences
     )
     
     # Assign optimal point matches
@@ -686,7 +687,7 @@ def post_processing_analysis(pred_path, truth_path, image_path, output_dir, pipe
     # Return relevant information
     found_matches_info = found_box_matches if testing and "matching_boxes" in found_box_matches and found_box_matches["matching_boxes"] else None
     
-    return missed, [], false_positive, output_path, fp_confidences, found_matches_info, all_testing_buildings_filtered, shapefile_objects_actually_matched_by_model_count, count_new_sf_buildings
+    return missed, false_positive, output_path, fp_confidences, found_matches_info, all_testing_buildings_filtered, shapefile_objects_actually_matched_by_model_count, count_new_sf_buildings
 
 
 # --- HELPER FUNCTIONS ---
@@ -1163,7 +1164,8 @@ def match_standalone_boxes(box_indices, truth_boxes, pred_boxes, matched_truths,
                         (0, 255, 0), 1)
 
 def find_potential_point_matches(point_indices, truth_boxes, pred_boxes, processed_pairs, 
-                              matched_truths, matched_predictions, point_distance_tolerance):
+                              matched_truths, matched_predictions, point_distance_tolerance,
+                              pred_confidences=None): # Add pred_confidences parameter
     """
     Find all potential matches between points and predictions
     
@@ -1183,13 +1185,15 @@ def find_potential_point_matches(point_indices, truth_boxes, pred_boxes, process
         Set of matched prediction indices
     point_distance_tolerance : float
         Distance tolerance for matching points to predictions
+    pred_confidences : list, optional
+        List of confidence scores for predictions. Required if sorting by confidence.
     
     Returns
     -------
     point_to_pred_matches : dict
         Dictionary mapping point indices to lists of potential prediction matches
     """
-    point_to_pred_matches = {}  # Maps point index to [(pred_idx, distance), ...]
+    point_to_pred_matches = {}  # Maps point index to [(pred_idx, distance, confidence), ...]
 
     for i in point_indices:
         if i in processed_pairs or i in matched_truths:
@@ -1206,6 +1210,8 @@ def find_potential_point_matches(point_indices, truth_boxes, pred_boxes, process
         for j, pred_box in enumerate(pred_boxes):
             if j in matched_predictions:
                 continue
+            
+            current_confidence = pred_confidences[j] if pred_confidences is not None and j < len(pred_confidences) else 0.0
                 
             pred_center_x = (pred_box[0] + pred_box[2]) / 2
             pred_center_y = (pred_box[1] + pred_box[3]) / 2
@@ -1216,7 +1222,7 @@ def find_potential_point_matches(point_indices, truth_boxes, pred_boxes, process
                 # Calculate distance to center
                 distance = ((point_center_x - pred_center_x)**2 + 
                             (point_center_y - pred_center_y)**2)**0.5
-                potential_matches.append((j, distance))
+                potential_matches.append((j, distance, current_confidence))
                 
             # Or check if point is NEAR box (using distance tolerance)
             else:
@@ -1229,7 +1235,7 @@ def find_potential_point_matches(point_indices, truth_boxes, pred_boxes, process
                     # Calculate distance to center for ranking
                     distance_to_center = ((point_center_x - pred_center_x)**2 + 
                                         (point_center_y - pred_center_y)**2)**0.5
-                    potential_matches.append((j, distance_to_center))
+                    potential_matches.append((j, distance_to_center, current_confidence))
         
         if potential_matches:
             point_to_pred_matches[i] = potential_matches
@@ -1237,8 +1243,7 @@ def find_potential_point_matches(point_indices, truth_boxes, pred_boxes, process
     return point_to_pred_matches
 
 def assign_point_matches(point_matches, truth_boxes, pred_boxes, matched_truths, matched_predictions, annotated_image):
-    """Assign optimal matches between points and predictions currently based on distance
-    (Future: could be improved with more sophisticated matching criteria based on confidence scores)
+    """Assign optimal matches between points and predictions, prioritizing confidence.
     
     Parameters
     ----------
@@ -1256,6 +1261,7 @@ def assign_point_matches(point_matches, truth_boxes, pred_boxes, matched_truths,
         Annotated image for visualization
     """
     # Sort all point indices by number of potential matches (ascending)
+    # This heuristic tries to match points with fewer options first.
     sorted_points = sorted(point_matches.keys(), 
                         key=lambda x: len(point_matches[x]))
 
@@ -1263,10 +1269,11 @@ def assign_point_matches(point_matches, truth_boxes, pred_boxes, matched_truths,
         if point_idx in matched_truths:
             continue  # Skip if already matched in a previous iteration
             
-        # Sort potential matches by distance (ascending)
-        matches = sorted(point_matches[point_idx], key=lambda x: x[1])
+        # Sort potential matches by confidence (descending), then by distance (ascending) as a tie-breaker.
+        # Assumes point_matches[point_idx] contains tuples like (pred_idx, distance, confidence)
+        matches = sorted(point_matches[point_idx], key=lambda x: (x[2], -x[1]), reverse=True) # x[2] is confidence, x[1] is distance
         
-        for pred_idx, distance in matches:
+        for pred_idx, distance, confidence in matches: # Unpack confidence as well
             if pred_idx not in matched_predictions:
                 # This is the best available match
                 matched_truths.add(point_idx)
@@ -1864,7 +1871,7 @@ def process_images_with_saved_predictions(image_files, predictions, confidences,
         
         # Call custom analysis
         pipeline_path = pipeline_path if use_pipeline else None
-        missed, _, false_positive, analysis_image_path, _, found_matches, reported_changes, \
+        missed, false_positive, analysis_image_path, _, found_matches, reported_changes, \
         shapefile_objects_actually_matched, count_missed_reported = post_processing_analysis(
             pred_path, 
             truth_path,
@@ -2322,7 +2329,7 @@ def count_type(shapefile_path, query):
         print("Warning: 'Type' field not found in shapefile")
         return 0
     
-def analyze_single_image(image_files, output_dir, pipeline_path, predictions, confidences, img_idx=0, use_pipeline=True, max_distance=100, mode=0): # taken directly from original code so might need updating 
+def analyze_single_image(image_files, output_dir, pipeline_path, predictions, confidences, img_idx=0, use_pipeline=True, max_distance=100, fp_confidence = 0.5): # taken directly from original code so might need updating 
     """Analyze a single image in detail"""
     if img_idx >= len(image_files):
             print(f"Image index {img_idx} is out of range (max: {len(image_files)-1})")
@@ -2333,16 +2340,12 @@ def analyze_single_image(image_files, output_dir, pipeline_path, predictions, co
         
     # Get predictions
 
-    if mode == 0: 
-        if str(img_path) not in predictions:
-            print(f"No predictions found for {img_path}")
-            return
-        pred_boxes = predictions[str(img_path)]
-        pred_confidences = confidences[str(img_path)] if str(img_path) in confidences else None
-    elif mode == 1:
-        print("Using sliding window predictions")
-        pred_boxes = predictions['boxes']
-        pred_confidences = predictions['confidences']
+    if str(img_path) not in predictions:
+        print(f"No predictions found for {img_path}")
+        return
+    pred_boxes = predictions[str(img_path)]
+    pred_confidences = confidences[str(img_path)] if str(img_path) in confidences else None
+
     # Create a temporary output directory for this analysis
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2361,7 +2364,7 @@ def analyze_single_image(image_files, output_dir, pipeline_path, predictions, co
     
     # Run analysis
     pipeline_path = pipeline_path if use_pipeline else None
-    missed, _, false_positive, analysis_image_path, fp_confidences, _ = post_processing_analysis(
+    missed, false_positive, analysis_image_path, fp_confidences,_,_,_,_ = post_processing_analysis(
         pred_path, 
         truth_path,
         img_path,
@@ -2370,7 +2373,8 @@ def analyze_single_image(image_files, output_dir, pipeline_path, predictions, co
         pipeline_shp_path=pipeline_path,
         max_distance=max_distance,
         pred_confidences=pred_confidences,
-        testing=False  
+        testing=False,
+        fp_confidence=fp_confidence  
     )
     
     # Display the analysis image
