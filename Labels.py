@@ -101,8 +101,8 @@ def save_tif_coregistered(filename, image, poly, channels=3, factor=1):
     return True
 
 # Shapefile paths
-shp1_path = "/home/rithvik/BHE/gas_transmission/gas_transmission.gt_building_exi_extent.shp"  # extent path
-shp2_path = "/home/rithvik/BHE/gas_transmission/gas_transmission.gt_building_exi_location.shp" # location path
+shp1_path = "/cephfs/work/rithvik/OE_CL_shps/gas_transmission.gt_building_exi_extent.shp"  # extent path
+shp2_path = "/cephfs/work/rithvik/OE_CL_shps/gas_transmission.gt_building_exi_location.shp" # location path
 
 # Load shapefiles
 gdf1 = gpd.read_file(shp1_path)
