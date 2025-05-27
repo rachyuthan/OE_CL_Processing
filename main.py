@@ -12,7 +12,7 @@ CONFIG = {
     "use_pipeline": True,      # Whether to filter by pipeline distance
     "conf_threshold": 0.01,     # Confidence threshold for predictions
     "fp_confidence": 0.50,  # Confidence threshold for false positives
-    "found_shp_file": "/cephfs/work/rithvik/OE_CL_shps/bhe_class_location_results_2025Q1.shp",
+    "found_shp_file": "/cephfs/work/rithvik/OE_CL_shps/bhe_class_location_results_q1_2025/bhe_class_location_results_2025Q1.shp",
     "testing" : True # Flag to run the comparison with the found shapefiles
 }
 

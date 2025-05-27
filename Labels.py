@@ -101,8 +101,8 @@ def save_tif_coregistered(filename, image, poly, channels=3, factor=1):
     return True
 
 # Shapefile paths
-shp1_path = "/cephfs/work/rithvik/OE_CL_shps/gas_transmission.gt_building_exi_extent.shp"  # extent path
-shp2_path = "/cephfs/work/rithvik/OE_CL_shps/gas_transmission.gt_building_exi_location.shp" # location path
+shp1_path = "/cephfs/work/rithvik/OE_CL_shps/gas_transmission/gas_transmission.gt_building_exi_extent.shp"  # extent path
+shp2_path = "/cephfs/work/rithvik/OE_CL_shps/gas_transmission/gas_transmission.gt_building_exi_location.shp" # location path
 
 # Load shapefiles
 gdf1 = gpd.read_file(shp1_path)
@@ -232,13 +232,13 @@ for _, region in enumerate(tqdm(database_customer)):
                 bbox_data.append(f"0 {x_center} {y_center} {width} {height}")
 
             # Save the bounding box data to a text file
-            output_path = '/cephfs/work/rithvik/datasets/datasets/BHE/2025Q1/labels/{}_{}.txt'.format(region['id'], region['region_customer_id'])
+            output_path = '/cephfs/work/rithvik/datasets/datasets/BHE/test/2025Q1/labels/{}_{}.txt'.format(region['id'], region['region_customer_id'])
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             with open(output_path, 'w') as f:
                 f.write('\n'.join(bbox_data))
 
             # Save the image as GeoTIFF instead of PNG
-            image_output_path = '/cephfs/work/rithvik/datasets/datasets/BHE/2025Q1/images/{}_{}.tif'.format(region['id'], region['region_customer_id'])
+            image_output_path = '/cephfs/work/rithvik/datasets/datasets/BHE/test/2025Q1/images/{}_{}.tif'.format(region['id'], region['region_customer_id'])
             os.makedirs(os.path.dirname(image_output_path), exist_ok=True)
 
             # Use save_tif_coregistered to preserve geographic information
