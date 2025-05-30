@@ -47,10 +47,10 @@ def load_models(model_type, model_version):
         return [model]  # Return as list for consistent handling
     elif model_type == 'kfolds':
         k_fold_models = []
-        model_dir = Path(f"./k_folds_cross_val_{model_version}") #change to correct directory
+        model_dir = Path(f"./OE_CL_Processing/k_folds_cross_val_{model_version}") #change to correct directory
 
         for k in range(5):
-            model_path = model_dir / "reretrained" / f"split_{k+1}" / "weights" / "best.pt"
+            model_path = model_dir / f"split_{k+1}" / "weights" / "best.pt"
             if model_path.exists():
                 k_fold_models.append(YOLO(model_path))
         return k_fold_models
@@ -87,10 +87,14 @@ def generate_predictions(models, image_files, output_dir, model_type, conf_thres
     -----------
     models : list
         List of loaded models for prediction
-    image_files : list
-        List of image file paths
+    image_files : list or Path
+        List of image file paths or single image path
     output_dir : str
         Directory to save predictions
+    model_type : str
+        Type of model ('yolo', 'kfolds', or 'rcnn')
+    conf_threshold : float
+        Confidence threshold for predictions
     Returns
     --------
     all_predictions : dict
@@ -98,9 +102,13 @@ def generate_predictions(models, image_files, output_dir, model_type, conf_thres
     all_confidences : dict
         Dictionary of confidence scores for each bbox for each image
     """
+    
+    if not isinstance(image_files, list): # Ensure image_files is a list
+        image_files = [image_files]
+    
     all_predictions = {}
     all_confidences = {}
-    prediction_dir = Path(output_dir) / "predictions_retrained"
+    prediction_dir = Path(output_dir) / "predictions"
     prediction_dir.mkdir(exist_ok=True, parents=True)
     
     for img_path in tqdm(image_files, desc="Generating predictions"):
@@ -117,6 +125,7 @@ def generate_predictions(models, image_files, output_dir, model_type, conf_thres
         if model_type == 'rcnn':
             rcnn_pred_path = Path('/home/rithvik/mmrotate-OE/work_dirs/BHE_results/labels') / f"{img_path.stem}.txt" #change to correct directory if it exists
             pred_boxes = load_boxes(rcnn_pred_path)
+            pred_confidences = [1.0] * len(pred_boxes)  # Default confidence for RCNN
         else:  # yolo or kfolds
             all_boxes = []
             all_confidences_raw = []
@@ -154,7 +163,7 @@ def load_saved_predictions(image_files, output_dir):
         Dictionary with image paths as keys and prediction boxes as values
     """
     all_predictions = {}
-    prediction_dir = Path(output_dir) / "predictions_retrained"
+    prediction_dir = Path(output_dir) / "predictions"
     
     for img_path in image_files:
         pred_path = prediction_dir / f"{img_path.stem}_pred.npy"
@@ -2232,7 +2241,7 @@ def sliding_window_detection(
     
     return all_final_boxes, all_final_confidences
 
-def load_saved_predictions(image_files, output_dir, models, conf_threshold, window_size=1024, overlap_ratio=0.5):
+def generate_sw_predictions(image_files, output_dir, models, conf_threshold, window_size=1024, overlap_ratio=0.5):
     """Load previously saved predictions"""
     sw_predictions = {}
     sw_confidences = {}

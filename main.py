@@ -37,7 +37,7 @@ image_files = get_image_paths(image_dir=CONFIG["image_dir"])
 
 # Generate and save predictions (sliding window)
 
-sw_predictions, sw_confidences = load_saved_predictions(image_files, CONFIG['output_dir'], models=models, conf_threshold=CONFIG['conf_threshold'])
+sw_predictions, sw_confidences = generate_sw_predictions(image_files, CONFIG['output_dir'], models=models, conf_threshold=CONFIG['conf_threshold'])
 
 while True:
     display = input("Enter debugging mode? (y/n): ").strip().lower()
