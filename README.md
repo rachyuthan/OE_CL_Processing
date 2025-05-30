@@ -7,6 +7,11 @@ conda env create -f environment.yaml
 conda activate OE_YOLO
 ```
 
+For the cosmic eye client it is required to be added seperately:
+```bash
+pip install --extra-index-url https://pypi.orbitaleye.nl/simple cosmic_eye_client
+```
+
 Run Labels.py to generate truth labels and pull images from server (only works for BHE). 
 Run main.py and change directories in the config so that everything is pulled from the correct locations. 
 Change the config settings to play around with the confidence threshold for accepting predictions and filtering false positives. 
