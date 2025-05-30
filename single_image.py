@@ -1,3 +1,6 @@
+"""
+File to run inference on a single image. Gives visualization of prediction along 
+with confidence scores."""
 from post_processing_tools import *
 from pathlib import Path
 import cv2
@@ -8,7 +11,7 @@ CONFIG = {
 
 Path(CONFIG["output_dir"]).mkdir(parents=True, exist_ok=True)
 
-def single_image_pred(    model_type='kfolds',
+def single_image_pred(model_type='kfolds',
     model_version='m',
     image_path=None,
     sliding_window=False,
