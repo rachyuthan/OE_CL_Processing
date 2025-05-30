@@ -263,7 +263,6 @@ dependencies:
       - colorama==0.4.6
       - contextily==1.6.2
       - coolname==2.2.0
-      - cosmic-eye-client==2.4.0
       - croniter==2.0.7
       - customer-database==2.7.0
       - dateparser==1.2.0
