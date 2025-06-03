@@ -43,7 +43,7 @@ def load_models(model_type, model_version):
         
     """
     if model_type == 'yolo':
-        model = YOLO("/home/rithvik/YOLO/test_runs/detect/BHE_YOLO/weights/best.pt") #change to correct directory
+        model = YOLO("./OE_CL_Processing/pre_trained/weights/best.pt") #change to correct directory
         return [model]  # Return as list for consistent handling
     elif model_type == 'kfolds':
         k_fold_models = []
@@ -123,7 +123,7 @@ def generate_predictions(models, image_files, output_dir, model_type, conf_thres
             
         # Get predictions based on model type
         if model_type == 'rcnn':
-            rcnn_pred_path = Path('/home/rithvik/mmrotate-OE/work_dirs/BHE_results/labels') / f"{img_path.stem}.txt" #change to correct directory if it exists
+            rcnn_pred_path = Path('path/to/rcnn/outputs') / f"{img_path.stem}.txt" #change to correct directory if it exists
             pred_boxes = load_boxes(rcnn_pred_path)
             pred_confidences = [1.0] * len(pred_boxes)  # Default confidence for RCNN
         else:  # yolo or kfolds
