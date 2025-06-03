@@ -120,8 +120,6 @@ config = {
         }
     }
 
-# customer = 'National-Fuel-2024'
-# customer = 'National-Grid-2024'
 customer = 'BHE-2024'
 
 database = RegionsDb(config['regions_db'])
