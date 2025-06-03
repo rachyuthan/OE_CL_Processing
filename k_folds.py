@@ -163,7 +163,7 @@ for image, label in zip(images, labels):
 
 print("Dataset split and copied successfully")
 
-path = "./pre_trained/weights/best.pt" #path to pre trained YOLO model
+path = "./OE_CL_Processing/pre_trained/weights/best.pt" #path to pre trained YOLO model
 model = YOLO(path, task='detect')
 results = {}
 
