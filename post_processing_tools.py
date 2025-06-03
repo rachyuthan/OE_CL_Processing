@@ -2386,9 +2386,6 @@ def analyze_single_image(image_files, output_dir, pipeline_path, predictions, co
         fp_confidence=fp_confidence  
     )
     
-    # Display the analysis image
-    from IPython.display import Image, display
-    display(Image(filename=analysis_image_path))
     
     # Print statistics
     print(f"\nStatistics for {img_path.name}:")
@@ -2485,13 +2482,6 @@ def debug_point_box_matching(image_files, output_path, predictions, img_idx=0, m
     # Save debug images
     cv2.imwrite(str(debug_dir / f"{img_path.stem}_truth.jpg"), truth_img)
     cv2.imwrite(str(debug_dir / f"{img_path.stem}_pred.jpg"), pred_img)
-    
-    # Analyze point-box relationships
-    from IPython.display import display, Image
-    print("Showing all truth boxes (red):")
-    display(Image(filename=str(debug_dir / f"{img_path.stem}_truth.jpg")))
-    print("\nShowing all prediction boxes (blue):")
-    display(Image(filename=str(debug_dir / f"{img_path.stem}_pred.jpg")))
     
     # Check for points inside prediction boxes
     problem_cases = []
