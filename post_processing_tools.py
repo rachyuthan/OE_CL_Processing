@@ -2546,7 +2546,7 @@ def debug_point_box_matching(image_files, output_path, predictions, img_idx=0, m
     # Save and show overlap image
     cv2.imwrite(str(debug_dir / f"{img_path.stem}_overlap.jpg"), overlap_img)
     print("\nShowing point-prediction relationships (green lines = match, red = problem):")
-    display(Image(filename=str(debug_dir / f"{img_path.stem}_overlap.jpg")))
+
     
     # Print problem cases
     if problem_cases:
