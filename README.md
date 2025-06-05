@@ -19,7 +19,7 @@ Run the program.
 
 Training of the pretrained xView and Openbuildings dataset can be done with [train.py](train.py). This performs basic YOLO training with the default aumgmentation settings. Custom data augmentation is done through the dataset yaml file. An extra parameter must be added and supported hyperparameters are given in the [YOLO docs](https://docs.ultralytics.com/modes/train/#augmentation-settings-and-hyperparameters).
 ```yaml
-# Add this dictionary for hyperparameter changes
+# Add this for hyperparameter changes
 # Hyperparameters ------------------------------------------------------------------------------------------------------
 lr0: 0.01 # (float) initial learning rate (i.e. SGD=1E-2, Adam=1E-3)
 lrf: 0.01 # (float) final learning rate (lr0 * lrf)
