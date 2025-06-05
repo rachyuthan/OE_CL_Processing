@@ -12,15 +12,18 @@ For the cosmic eye client it is required to be added seperately:
 pip install --extra-index-url https://pypi.orbitaleye.nl/simple cosmic_eye_client
 ```
 
-Run Labels.py to generate truth labels and pull images from server (only works for BHE). 
-Run main.py and change directories in the config so that everything is pulled from the correct locations. 
-Change the config settings to play around with the confidence threshold for accepting predictions and filtering false positives. 
+Run [Labels.py](Labels.py) to generate truth labels and pull images from server (only works for BHE). 
+Run [main.py](main.py) to perform inference on the images along with postprocessing on the images. Change directories in the config so that everything is pulled from the correct locations. 
+Change the CONFIG settings to play around with the confidence threshold for accepting predictions and filtering false positives. 
 Run the program.
 
+Training of the pretrained xView and Openbuildings dataset can be done with [train.py](train.py). This performs basic YOLO training with the default aumgmentation settings. 
 More detailed documentation about how the YOLO model works and how to train and make predictions can be see in [documentation.md](documentation.md)
 
-Model weights pre-trained path: ./OE_CL_Processing/pre_trained/weights/best.pt
 
-K-folds weights: ./OE_CL_Processing/k_folds_cross_val_m/
+Model weights for pre-trained xView adn Openbuildings Dataset path: ./OE_CL_Processing/pre_trained/weights/best.pt
 
-The inference can be run on the entire [dataset](main.py) or on any [single image](single_image.py) 
+Transfer learning for customer images done with K-folds cross validation with 5 folds.
+K-folds weights for customer data: ./OE_CL_Processing/k_folds_cross_val_m/
+
+The inference can be run on the entire [dataset](main.py) or on any [single image](single_image.py). The visualization of both shows a few things. Green boxes are true positives, red are false negatives or misses, purple boxes are false positives and grey boxes are predictions made on the image outside of the pipeline corridor. The gray boxes can be turned off to make the image cleaner as these are not counted in the metrics. Thinner box lines indicate model predictions, while thicker box lines indicate baseline labels.
