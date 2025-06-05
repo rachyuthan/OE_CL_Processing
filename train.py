@@ -148,7 +148,9 @@ def calculate_dataset_mean_std(yaml_path, train=True):
 # Train the model
 
 model = YOLO('yolo11m.pt')   # switch to whichever YOLO model from worst to best (n, s, m, l, x) 
+# hyp = {
 
+# }
 
 results = model.train(data='./YOLO/combined.yaml', 
                       epochs=100, batch=1, imgsz=1024, 
