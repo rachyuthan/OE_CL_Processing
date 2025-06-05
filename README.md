@@ -17,18 +17,25 @@ Run [main.py](main.py) to perform inference on the images along with postprocess
 Change the CONFIG settings to play around with the confidence threshold for accepting predictions and filtering false positives. 
 Run the program.
 
-Training of the pretrained xView and Openbuildings dataset can be done with [train.py](train.py). This performs basic YOLO training with the default aumgmentation settings. Custom data augmentation is done through the dataset yaml file. An extra parameter must be added and supported hyperparameters are given in the [YOLO docs](https://docs.ultralytics.com/modes/train/#augmentation-settings-and-hyperparameters).
+Training of the pretrained xView and Openbuildings dataset can be done with [train.py](train.py). This performs basic YOLO training with the default aumgmentation settings. Custom data augmentation is done an extra configuration yaml file. An extra parameter must be added and supported hyperparameters are given in the [YOLO docs](https://docs.ultralytics.com/modes/train/#augmentation-settings-and-hyperparameters).
 ```yaml
 # Add this for hyperparameter changes
 # Hyperparameters ------------------------------------------------------------------------------------------------------
 lr0: 0.01 # (float) initial learning rate (i.e. SGD=1E-2, Adam=1E-3)
 lrf: 0.01 # (float) final learning rate (lr0 * lrf)
 # ... Any other changes
-
-cfg: config.raml #add a name to override defaults.yaml
 ```
+
+Then when training the script needs to be called:
+```python
+results = model.train(cfg=config.yaml) # assuming config.yaml has the hyperparameter changes
+```
+
+Hyperparameters can also be tuned by using a genetic algorithm. Instructions for this is also given in the [docs](https://docs.ultralytics.com/guides/hyperparameter-tuning/). This method was not used originally, but can be used to improve hyperparameters.
+
 More detailed documentation about how the YOLO model works and how to train and make predictions can be see in [documentation.md](documentation.md)
 
+Image cropping to 1024x1024 or any other size can be done with img_split.py. Make sure the image path for training points to the output folder of this tool.
 
 Model weights for pre-trained xView adn Openbuildings Dataset path: ./OE_CL_Processing/pre_trained/weights/best.pt
 
