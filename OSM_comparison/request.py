@@ -28,7 +28,7 @@ BUFFER_AREA_METERS = 214  # Extra margin around shapefile bounds for OSM query
 OVERPASS_TIMEOUT_SECONDS = 180  # Timeout for the Overpass API request
 OVERPASS_API_URL = "https://overpass-api.de/api/interpreter"
 
-USER_AGENT = 'BuildingComparisonScript/1.0 (rithvik.achyuthan@orbitaleye.nl)' #<------Replace this line
+USER_AGENT = None #'BuildingComparisonScript/1.0 (user@email.com)' #<------Replace this line
 TILE_SIZE_DEGREES = 0.1  # Approximate size of query tiles in degrees (adjust as needed)
 TILE_REQUEST_DELAY_SECONDS = 1  # Delay between tile requests to be polite to API
 
