@@ -43,3 +43,5 @@ Transfer learning for customer images done with K-folds cross validation with 5 
 K-folds weights for customer data: ./OE_CL_Processing/k_folds_cross_val_m/
 
 The inference can be run on the entire [dataset](main.py) or on any [single image](single_image.py). The visualization of both shows a few things. Green boxes are true positives, red are false negatives or misses, purple boxes are false positives and grey boxes are predictions made on the image outside of the pipeline corridor. The gray boxes can be turned off to make the image cleaner as these are not counted in the metrics. Thinner box lines indicate model predictions, while thicker box lines indicate baseline labels.
+
+There is also an example of the usage of the overpass API to compare the baseline with OSM. An example of the output is included in [tile_comparison_maps](OSM_comparison/tile_comparison_maps/). There is a known issue with the request.py where the program gets stuck after line 600 and this will need to get resolved.
