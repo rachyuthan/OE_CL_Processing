@@ -12,14 +12,14 @@ import folium
 import traceback
 
 # --- Configuration ---
-SHAPEFILE_PATH = '/home/rithvik/BHE/gas_transmission/gas_transmission.gt_building_exi_location.shp'  # Location shapefile
-MASK_SHAPEFILE_PATH = '/home/rithvik/BHE/gas_transmission/gas_transmission.gt_building_exi_extent.shp' # REQUIRED: Update this path! Building mask shapefile
-FOUND_SHAPEFILE_PATH = '/home/rithvik/BHE/bhe_shapefile/bhe_class_location_results.shp' # Shapefile containing buildings already found through class location
+SHAPEFILE_PATH = '/cephfs/work/rithvik/OE_CL_shps/gas_transmission/gas_transmission.gt_building_exi_location.shp'  # Location shapefile
+MASK_SHAPEFILE_PATH = '/cephfs/work/rithvik/OE_CL_shps/gas_transmission/gas_transmission.gt_building_exi_extent.shp' # REQUIRED: Update this path! Building mask shapefile
+FOUND_SHAPEFILE_PATH = '/cephfs/work/rithvik/OE_CL_shps/bhe_class_location_results_q1_2025/bhe_class_location_results.shp' # Shapefile containing buildings already found through class location
 SHAPEFILE_FILTER_COLUMN = None  # Set to None if no filtering needed (applies to location shapefile)
 SHAPEFILE_FILTER_VALUE = None  # Set to None if no filtering needed (applies to location shapefile)
 
 # --- New Line Proximity Filter Config ---
-LINE_SHAPEFILE_PATH = '/home/rithvik/BHE/pipeline.geojson'  # Set to None to disable line proximity filter
+LINE_SHAPEFILE_PATH = '/cephfs/work/rithvik/OE_CL_shps/pipeline.geojson'  # Set to None to disable line proximity filter
 FILTER_DISTANCE_METERS = 214  # Distance (meters) around the line to keep buildings
 # --- End New Config ---
 
@@ -28,12 +28,12 @@ BUFFER_AREA_METERS = 214  # Extra margin around shapefile bounds for OSM query
 OVERPASS_TIMEOUT_SECONDS = 180  # Timeout for the Overpass API request
 OVERPASS_API_URL = "https://overpass-api.de/api/interpreter"
 
-USER_AGENT = 'BuildingComparisonScript/1.0 (rithvik.achyuthan@orbitaleye.nl)'
+USER_AGENT = 'BuildingComparisonScript/1.0 (rithvik.achyuthan@orbitaleye.nl)' #<------Replace this line
 TILE_SIZE_DEGREES = 0.1  # Approximate size of query tiles in degrees (adjust as needed)
 TILE_REQUEST_DELAY_SECONDS = 1  # Delay between tile requests to be polite to API
 
 # --- Define Output Directory ---
-OUTPUT_DIR = "/home/rithvik/OSM_comparison/tile_comparison_maps"
+OUTPUT_DIR = "./tile_comparison_maps" # Replace with your desired output directory
 OUTPUT_FILENAME_BASE = "overall_comparison_map.html"
 OUTPUT_GEOJSON_BASE = "unmatched_osm_buildings.geojson"  # Changed base name
 OUTPUT_FILENAME = os.path.join(OUTPUT_DIR, OUTPUT_FILENAME_BASE)
