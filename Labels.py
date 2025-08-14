@@ -13,10 +13,11 @@ from tqdm import tqdm
 import geopandas as gpd
 import pandas as pd
 import os
+import psycopg
+
 
 def get_utc_timestamp(x: datetime):
         return int((x - datetime(1970, 1, 1)).total_seconds())
-
 
 def get_images(database, config, region, interval_utc):
     coords = [region['bounds'].centroid.x, region['bounds'].centroid.y]
@@ -100,6 +101,45 @@ def save_tif_coregistered(filename, image, poly, channels=3, factor=1):
     # print('Image saved to', filename)
     return True
 
+def get_reg_good(region, interval_start, interval_end, database, cur, query0, query1, no_reg_tifs):
+    images = database.get_optical_images_containing_point_in_period([region['bounds'].centroid.x, region['bounds'].centroid.y], [int(interval_start.timestamp()), int(interval_end.timestamp())])  ##can be improved!!
+    wms_images = sorted(images, key=lambda x: x["capture_timestamp"])
+    wms_images = [x for x in wms_images if x["source"] != "Sentinel-2"]
+
+    reg_good = []
+    for i, wms_im in enumerate((wms_images)):
+
+        image_id = search_tables(cur, query0, wms_im['wms_layer_name'])[0]['id']
+        wms_im['image_id'] = image_id
+        reg_status = search_tables(cur, query1, image_id)
+        if len(reg_status)!=0 and reg_status[0]['status'] == 'ml_good':
+            reg_status = [{'status': 'ml_good'}]
+            reg_good.append(wms_im)
+        
+        if len(reg_status)==0:
+            if wms_im['wms_layer_name'][0] in no_reg_tifs:
+                reg_status = [{'status': 'ml_bad'}]
+            else:
+                reg_status = [{'status': 'ml_good'}]
+                reg_good.append(wms_im)
+
+        wms_im['reg_status'] = reg_status[0]['status']
+ 
+    return reg_good
+
+def search_tables(cur, query, image_id):
+                cur.execute(query, (image_id,))
+                data_tmp = cur.fetchall()
+                desc = cur.description
+                col_names = [x[0] for x in desc]
+                results = [dict(zip(col_names, x)) for x in data_tmp]  
+
+                return results
+
+query0 = "SELECT id FROM public.optical_image WHERE wms_layer_name=%s"
+query1 = "SELECT status FROM public.optical_image_coregistration WHERE image_id=%s"
+
+
 # Shapefile paths
 shp1_path = "/cephfs/work/rithvik/OE_CL_shps/gas_transmission/gas_transmission.gt_building_exi_extent.shp"  # extent path
 shp2_path = "/cephfs/work/rithvik/OE_CL_shps/gas_transmission/gas_transmission.gt_building_exi_location.shp" # location path
@@ -130,7 +170,7 @@ database_customer = database.get_regions_by_customer(customer)
 dates = [datetime(2025, 2, 15), datetime(2025, 4, 1)]
 interval_utc = [get_utc_timestamp(dates[0]), get_utc_timestamp(dates[1])]
 
-
+counter = 0
 # Select a region
 for _, region in enumerate(tqdm(database_customer)):
         #print(region)
@@ -138,12 +178,36 @@ for _, region in enumerate(tqdm(database_customer)):
 
     images = get_images(database, config, region, interval_utc)
 
-
+    # print(region)
     #    print('len', len(images))
     if images:
-        img = get_image_from_layer(images[-1], region['bounds'])
+        # img = get_image_from_layer(images[-1], region['bounds'])
         # save_tif_coregistered("/home/rithvik/YOLO/image.tif", img, region['bounds'], channels=3, factor=1)
         #print(img.shape)
+
+        dead_imgs = os.listdir('/cephfs/pimsys/coregistration/bad_tifs/production')
+        no_reg_tifs = [os.path.splitext(file)[0] for file in dead_imgs]
+
+        connection_string = f"dbname = '{config['regions_db']['database']}' user = '{config['regions_db']['user']}' host = '{config['regions_db']['host']}' port = {config['regions_db']['port']} password = '{config['regions_db']['password']}'"
+        with psycopg.connect(connection_string) as conn:
+            with conn.cursor() as cur:
+
+                reg_good = get_reg_good(region, dates[0], dates[1], database, cur, query0, query1, no_reg_tifs)
+        # print(reg_good)
+        if not reg_good:
+            continue
+        if counter == 264 or counter == 265:
+            print(reg_good)
+
+        timestamp = reg_good[0]['capture_timestamp'] if reg_good else 'null'
+
+        # print('timestamp', timestamp)
+
+        image_id = reg_good[0]['image_id'] if reg_good else 'null'
+        # print('image_id', image_id)
+        
+        # Get the image from the layer
+        img = get_image_from_layer(reg_good[0], region['bounds'])
         img_pil = Image.fromarray(img)
 
         # Get image width and height
@@ -230,13 +294,13 @@ for _, region in enumerate(tqdm(database_customer)):
                 bbox_data.append(f"0 {x_center} {y_center} {width} {height}")
 
             # Save the bounding box data to a text file
-            output_path = '/cephfs/work/rithvik/datasets/datasets/BHE/test/2025Q1/labels/{}_{}.txt'.format(region['id'], region['region_customer_id'])
+            output_path = '/cephfs/work/rithvik/datasets/datasets/BHE/test/2025Q1v2/labels/{}_{}_{}_{}.txt'.format(region['id'], region['region_customer_id'], image_id, timestamp)
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             with open(output_path, 'w') as f:
                 f.write('\n'.join(bbox_data))
 
             # Save the image as GeoTIFF instead of PNG
-            image_output_path = '/cephfs/work/rithvik/datasets/datasets/BHE/test/2025Q1/images/{}_{}.tif'.format(region['id'], region['region_customer_id'])
+            image_output_path = '/cephfs/work/rithvik/datasets/datasets/BHE/test/2025Q1v2/images/{}_{}_{}_{}.tif'.format(region['id'], region['region_customer_id'], image_id, timestamp)
             os.makedirs(os.path.dirname(image_output_path), exist_ok=True)
 
             # Use save_tif_coregistered to preserve geographic information
@@ -247,6 +311,7 @@ for _, region in enumerate(tqdm(database_customer)):
                 channels=3,         # RGB image
                 factor=1            # No downsampling
             )
+    counter += 1
         # else:
         #     print(f"No buildings found in region {region['id']}")
 
