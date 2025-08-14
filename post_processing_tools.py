@@ -21,6 +21,7 @@ from tqdm import tqdm
 from sys import path
 from evaluation import (create_final_histogram, create_final_pie_chart, 
                   calculate_box_metrics, non_max_suppression)
+from datetime import datetime
 
 
 # --- LOADING MODELS IMAGES AND PREDICTIONS ---
@@ -467,6 +468,11 @@ def post_processing_analysis(pred_path, truth_path, image_path, output_dir, pipe
     image, height, width, transform, crs, is_geotiff, bounds_geo = load_and_prepare_image(image_path)
     annotated_image = image.copy() if save_images else None
     
+    # Initialize Removed, New Geolocation lists
+
+    removed_geo = []
+    new_geo = []
+
     # --- 2. LOAD AND PREPARE BOXES ---
     pred_boxes = load_and_filter_predictions(pred_path, overlap_threshold=0.7)
     truth_boxes = load_truth_boxes(truth_path, truth_is_YOLO, width, height)
@@ -577,6 +583,40 @@ def post_processing_analysis(pred_path, truth_path, image_path, output_dir, pipe
     missed_boxes = [i for i in box_indices if i not in matched_truths]
     missed = [truth_boxes[i] for i in (missed_points + missed_boxes)]
     
+    if is_geotiff and transform is not None:
+        for box in missed:
+            x1, y1, x2, y2 = map(int, box)
+
+            center_x = (x1 + x2) / 2
+            center_y = (y1 + y2) / 2
+            geo_x, geo_y = transform * (center_x, center_y)
+
+            ul_x, ul_y = transform * (x1, y1) # Upper Left
+            lr_x, lr_y = transform * (x2, y2) # Lower Right
+
+            # Extract timestamp from image filename (format: regionid_customer_id_image_id_timestamp)
+            timestamp_part = image_path.stem.split('_')[-1] if '_' in image_path.stem else 'null'
+            image_id = image_path.stem.split('_')[2] if '_' in image_path.stem else 'null'
+            removed_geo.append({
+                'id': 'null',
+                'model_version': 'YOLOv11',
+                'cycle_start': '2025-02-01 00:00:00',
+                'cycle_end': '2025-04-01 00:00:00',
+                'project_id': '85',
+                'model_geometry': f'POLYGON(({ul_x} {ul_y}, {lr_x} {ul_y}, {lr_x} {lr_y}, {ul_x} {lr_y}, {ul_x} {ul_y}))',
+                'model_class': 'removed',
+                'insert_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'detection_date': timestamp_part,  # Extract timestamp from filename
+                'reference_date': 'null',
+                'detection_image': image_id,
+                'reference_image_id': 'null',
+                'reported_geometry': 'null',
+                'reported_class': 'null',
+                'reported_timestamp': 'null',
+                'confirmation_status': 'null',
+                'confimed_by': 'null',
+            })
+
     # --- 8. PROCESS REMOVED BUILDINGS SHAPEFILE ---
     if save_images and testing and is_geotiff and removed_buildings is not None:
         matching_indices = process_removed_buildings(
@@ -605,6 +645,40 @@ def post_processing_analysis(pred_path, truth_path, image_path, output_dir, pipe
     false_positive, fp_confidences = get_filtered_false_positives(
         pred_boxes, matched_predictions, pred_confidences, fp_confidence=fp_confidence
     )
+
+    # Collect geographic locations of false positives
+    if is_geotiff and transform is not None:
+        for box in false_positive:
+            x1, y1, x2, y2 = map(int, box)
+            # Convert pixel coordinates to geographic coordinates
+            center_x_px = (x1 + x2) / 2
+            center_y_px = (y1 + y2) / 2
+            geo_x, geo_y = transform * (center_x_px, center_y_px)
+            
+            ul_x, ul_y = transform * (x1, y1)  # Upper Left
+            lr_x, lr_y = transform * (x2, y2)  # Lower Right
+            
+            timestamp_part = image_path.stem.split('_')[-1] if '_' in image_path.stem else 'null'
+            image_id = image_path.stem.split('_')[2] if '_' in image_path.stem else 'null'
+            new_geo.append({
+                'id': 'null',
+                'model_version': 'YOLOv11',
+                'cycle_start': '2025-02-01 00:00:00',
+                'cycle_end': '2025-04-01 00:00:00',
+                'project_id': '85',
+                'model_geometry': f'POLYGON(({ul_x} {ul_y}, {lr_x} {ul_y}, {lr_x} {lr_y}, {ul_x} {lr_y}, {ul_x} {ul_y}))',
+                'model_class': 'new',
+                'insert_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'detection_date': timestamp_part,
+                'reference_date': 'null',
+                'detection_image': image_id,
+                'reference_image_id': 'null',
+                'reported_geometry': 'null',
+                'reported_class': 'null',
+                'reported_timestamp': 'null',
+                'confirmation_status': 'null',
+                'confimed_by': 'null',
+            })
     
     # --- 11. PROCESS FOUND BUILDINGS SHAPEFILE ---
     if save_images and testing and is_geotiff and found_buildings is not None:
@@ -696,7 +770,8 @@ def post_processing_analysis(pred_path, truth_path, image_path, output_dir, pipe
     # Return relevant information
     found_matches_info = found_box_matches if testing and "matching_boxes" in found_box_matches and found_box_matches["matching_boxes"] else None
     
-    return missed, false_positive, output_path, fp_confidences, found_matches_info, all_testing_buildings_filtered, shapefile_objects_actually_matched_by_model_count, count_new_sf_buildings
+    return missed, false_positive, output_path, fp_confidences, found_matches_info, all_testing_buildings_filtered, \
+        shapefile_objects_actually_matched_by_model_count, count_new_sf_buildings, new_geo, removed_geo
 
 
 # --- HELPER FUNCTIONS ---
@@ -1846,8 +1921,10 @@ def process_images_with_saved_predictions(image_files, predictions, confidences,
     flagged_missed = 0
     flagged_fp = 0
     flagged_buildings = 0
-    flagged_shapefile_matches_count = 0
+    # flagged_shapefile_matches_count = 0
     
+    all_removed_geo = []
+    all_new_geo = []
     
     # Process each image
     for img_path in tqdm(image_files, desc="Processing images"):
@@ -1881,7 +1958,7 @@ def process_images_with_saved_predictions(image_files, predictions, confidences,
         # Call custom analysis
         pipeline_path = pipeline_path if use_pipeline else None
         missed, false_positive, analysis_image_path, _, found_matches, reported_changes, \
-        shapefile_objects_actually_matched, count_missed_reported = post_processing_analysis(
+        shapefile_objects_actually_matched, count_missed_reported, new_geo, removed_geo = post_processing_analysis(
             pred_path, 
             truth_path,
             img_path,
@@ -1909,12 +1986,12 @@ def process_images_with_saved_predictions(image_files, predictions, confidences,
         total_missed += len(missed)
         
         total_fp += len(false_positive)
-        is_flagged = False    
+        # is_flagged = False    
         # Flag images with high error rates
         if (buildings > 10) or (buildings < 10 and buildings + len(false_positive) > 10):
             
             if (buildings > 0 and (len(false_positive)/buildings > 0.3 or len(missed)/buildings > 0.3)) or (buildings == 0 and (len(false_positive) > 0 or len(missed) > 0)): # in case buildings == 0
-                is_flagged = True
+                # is_flagged = True
                 # print(f"Warning: High false positive/missed rate for {img_path.name}: {len(false_positive)/buildings:.2f} / {len(missed)/buildings:.2f}")
                 # Write the flagged image name to flags.txt
                 flags_file_path = results_dir / "flags.txt"
@@ -2004,6 +2081,31 @@ def process_images_with_saved_predictions(image_files, predictions, confidences,
         "Shapefile Objects Matched by Model in Non-Flagged Images": shapefile_objects_matched_in_non_flagged_images
         
     }
+
+    # Save geographic coordinates of removed and new buildings if available
+    if all_removed_geo or all_new_geo:
+        # Combine both datasets with a type identifier
+        combined_geo_data = []
+        
+        # Add removed buildings (missed detections) with type identifier
+        for geo_entry in all_removed_geo:
+            geo_entry_copy = geo_entry.copy()
+            geo_entry_copy['type'] = 'missed_building'
+            combined_geo_data.append(geo_entry_copy)
+        
+        # Add new buildings (false positives) with type identifier  
+        for geo_entry in all_new_geo:
+            geo_entry_copy = geo_entry.copy()
+            geo_entry_copy['type'] = 'false_positive'
+            combined_geo_data.append(geo_entry_copy)
+        
+        # Create combined DataFrame and save
+        if combined_geo_data:
+            combined_geo_df = pd.DataFrame(combined_geo_data)
+            combined_geo_filepath = results_dir / "building_coordinates_all.csv"
+            combined_geo_df.to_csv(combined_geo_filepath, index=False)
+    
+        
 
     if save_images:
         # Create summary visualizations
@@ -2373,7 +2475,7 @@ def analyze_single_image(image_files, output_dir, pipeline_path, predictions, co
     
     # Run analysis
     pipeline_path = pipeline_path if use_pipeline else None
-    missed, false_positive, analysis_image_path, fp_confidences,_,_,_,_ = post_processing_analysis(
+    missed, false_positive, analysis_image_path, fp_confidences,_,_,_,_, missed_geo, new_geo = post_processing_analysis(
         pred_path, 
         truth_path,
         img_path,
@@ -2390,7 +2492,18 @@ def analyze_single_image(image_files, output_dir, pipeline_path, predictions, co
     # Print statistics
     print(f"\nStatistics for {img_path.name}:")
     print(f"  Missed detections: {len(missed)}")
+    
     print(f"  New Detections: {len(false_positive)}")
+    
+
+    # Print missed and new detections to the same CSV
+    if missed_geo or new_geo:
+        combined_df = pd.DataFrame(missed_geo + new_geo)
+        combined_df.to_csv(single_img_dir / f"{img_path.stem}_combined_detections.csv", index=False)
+        print(f"Changes saved to: {single_img_dir / f'{img_path.stem}_combined_detections.csv'}")
+    
+    print(f" Missed and new detections saved to: {single_img_dir}")
+
     if len(false_positive) > 0:
         print(f"  New Detection avg confidence: {sum(fp_confidences)/len(fp_confidences):.3f}")
         print(f"  New Detection confidence range: {min(fp_confidences):.3f} - {max(fp_confidences):.3f}")
