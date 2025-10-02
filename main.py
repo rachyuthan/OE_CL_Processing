@@ -1,18 +1,19 @@
 from post_processing_tools import *
 import random
+import pyproj
 
 # Global configuration
 CONFIG = {
     "pipeline_path": "/cephfs/work/rithvik/OE_CL_shps/pipeline.geojson",
-    "image_dir": "/cephfs/work/rithvik/datasets/datasets/BHE/test/2025Q1v2/images",
-    "output_dir": "/home/rithvik/YOLO/BHE/table_prep/",
+    "image_dir": "/cephfs/work/rithvik/datasets/datasets/BHE/2024_GBA/autosplit_test.txt",
+    "output_dir": "/home/rithvik/YOLO/BHE/comparison_new/",
     "max_distance": 213.33,
     "model_type": "kfolds",  # Options: "yolo", "kfolds", "rcnn"
     "model_version": "m",    # For kfolds models
     "use_pipeline": True,      # Whether to filter by pipeline distance
     "conf_threshold": 0.01,     # Confidence threshold for predictions
     "fp_confidence": 0.50,  # Confidence threshold for false positives
-    "found_shp_file": "/cephfs/work/rithvik/OE_CL_shps/bhe_class_location_results_q1_2025/bhe_class_location_results_2025Q1.shp",
+    "found_shp_file": "/cephfs/work/rithvik/OE_CL_shps/bhe_class_location_results_q1_2025/bhe_class_location_results_2025Q1_shapefile/bhe_class_location_results_2025Q1.shp",
     "testing" : True # Flag to run the comparison with the found shapefiles
 }
 
@@ -25,7 +26,7 @@ models = load_models(model_type=CONFIG["model_type"], model_version=CONFIG["mode
 print(f"Loaded {len(models) if models else 0} models for {CONFIG['model_type']}")
 
 # Get all image paths
-image_files = get_image_paths(image_dir=CONFIG["image_dir"])
+image_files = get_image_paths(image_source=CONFIG["image_dir"])
 
 
 ### Change logic to check if predictions already exist ###
@@ -38,6 +39,23 @@ image_files = get_image_paths(image_dir=CONFIG["image_dir"])
 # Generate and save predictions (sliding window)
 
 sw_predictions, sw_confidences = generate_sw_predictions(image_files, CONFIG['output_dir'], models=models, conf_threshold=CONFIG['conf_threshold'])
+
+# === SHAPEFILE FILTERING SETUP ===
+preloaded_buildings = None  # Initialize to None
+
+while True:
+    display = input("Filter baseline by shapefile types? (y/n): ").strip().lower()
+    if display == 'y':
+        exclude_types = get_user_filter_preferences()
+        sample_crs = pyproj.CRS.from_epsg(4326)
+        preloaded_buildings = preload_and_filter_shapefiles(sample_crs, exclude_types=exclude_types)
+        break
+    elif display == 'n':
+        print("No filtering will be applied to shapefiles.")
+        preloaded_buildings = None
+        break
+    else:
+        print("Invalid input. Please enter 'y' or 'n'.")
 
 while True:
     display = input("Generate dummy data? (y/n): ").strip().lower()
@@ -60,7 +78,8 @@ if generate_dummy_data:
     for num in dummy_predictions:
         analysis_image_path = analyze_single_image(image_files, output_dir=CONFIG["output_dir"], pipeline_path=CONFIG["pipeline_path"],
                             predictions=sw_predictions, confidences=sw_confidences, img_idx=num, use_pipeline=CONFIG["use_pipeline"],
-                            max_distance=CONFIG["max_distance"], fp_confidence=CONFIG["fp_confidence"])
+                            max_distance=CONFIG["max_distance"], fp_confidence=CONFIG["fp_confidence"], dummy=True, 
+                            preloaded_buildings=preloaded_buildings)
         # Find the generated directory for this analysis
         if analysis_image_path:
             analysis_dir = Path(analysis_image_path).parent
@@ -140,8 +159,9 @@ if not generate_dummy_data:
         # Debugging code
         print("Debugging mode is enabled.")
 
-        analyze_single_image(image_files, output_dir= CONFIG["output_dir"], pipeline_path=CONFIG["pipeline_path"], 
-                            predictions=sw_predictions, confidences=sw_confidences, img_idx=58, use_pipeline=True, max_distance=213.33, fp_confidence=0.4)
+        analyze_single_image(image_files, output_dir=CONFIG["output_dir"], pipeline_path=CONFIG["pipeline_path"], 
+                            predictions=sw_predictions, confidences=sw_confidences, img_idx=58, use_pipeline=True, 
+                            max_distance=213.33, fp_confidence=0.4, preloaded_buildings=preloaded_buildings)
 
     elif not debugging:
 
@@ -184,7 +204,8 @@ if not generate_dummy_data:
                 pipeline_path=CONFIG['pipeline_path'],
                 max_distance=CONFIG['max_distance'],
                 fp_confidence=CONFIG['fp_confidence'],
-                testing=CONFIG['testing']  # Pass the testing flag if comparison to reported
+                testing=CONFIG['testing'],  # Pass the testing flag if comparison to reported
+                preloaded_buildings=preloaded_buildings  # Pass pre-loaded shapefiles
             )
         # Perform sensitivity analysis for FP confidence
         if sens_fp:
@@ -204,7 +225,8 @@ if not generate_dummy_data:
                     max_distance=CONFIG['max_distance'],
                     fp_confidence=CONFIG['fp_confidence'],
                     testing=CONFIG['testing'],  # Pass the testing flag
-                    save_images=False  # Save images for this test
+                    save_images=False,  # Save images for this test
+                    preloaded_buildings=preloaded_buildings  # Pass pre-loaded shapefiles
                 )
                 print(f"Results saved to: {results_dir}")
                 # Define the CSV file path outside the loop
@@ -238,12 +260,19 @@ if not generate_dummy_data:
 
                 results_dir, metrics = process_images_with_saved_predictions(
                     image_files, 
-                    sw_predictions, 
-                    CONFIG['output_dir'],
+                    sw_predictions,
+                    sw_confidences, 
+                    output_dir=CONFIG['output_dir'],
+                    model_version=CONFIG['model_version'],
+                    model_type=CONFIG['model_type'],
+                    found_shp_file=CONFIG['found_shp_file'],
                     use_pipeline=CONFIG['use_pipeline'],
+                    pipeline_path=CONFIG['pipeline_path'],
                     max_distance=CONFIG['max_distance'],
+                    fp_confidence=CONFIG['fp_confidence'],
                     testing=CONFIG['testing'],  # Pass the testing flag
-                    save_images=False  # Save images for this test
+                    save_images=False,  # Save images for this test
+                    preloaded_buildings=preloaded_buildings  # Pass pre-loaded shapefiles
                 )
                 print(f"Results saved to: {results_dir}")
                 # Define the CSV file path outside the loop
