@@ -49,7 +49,7 @@ def load_models(model_type, model_version):
         return [model]  # Return as list for consistent handling
     elif model_type == 'kfolds':
         k_fold_models = []
-        model_dir = Path(f"/home/rithvik/CL_test/YOLO/k_folds_cross_val_{model_version}") #change to correct directory
+        model_dir = Path(f"./new_weights/k_folds_cross_val_{model_version}") #change to correct directory
         print(f"Loading k-fold models from {model_dir}")
         for k in range(5):
             model_path = model_dir / f"split_{k+1}" / "weights" / "best.pt"
@@ -1145,7 +1145,7 @@ def preload_and_filter_shapefiles(crs, exclude_types=None):
             
             # Ensure CRS matches the target CRS
             if found_buildings.crs != crs:
-                print(f"Converting shapefile CRS from {found_buildings.crs} to {crs}")
+                print(f"Converting shapefile CRS")
                 found_buildings = found_buildings.to_crs(crs)
             
             print(f"Pre-loaded {len(found_buildings)} buildings from gas transmission shapefiles")
