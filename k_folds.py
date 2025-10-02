@@ -9,7 +9,7 @@ from ultralytics import YOLO
 from PIL import Image
 
 
-dataset_path = Path("/cephfs/work/rithvik/datasets/datasets/NatCombined/cropped/")
+dataset_path = Path("/cephfs/work/rithvik/datasets/datasets/Sept2025Dataset/")
 supported_extensions = [".jpg", ".jpeg", ".png"]
 
 # Initialize an empty list to store image file paths
@@ -37,7 +37,7 @@ if len(images) != len(labels):
     labels = [label_dir / (img.stem + ".txt") for img in images]
 
 
-yaml_file = "/cephfs/work/rithvik/datasets/datasets/NatCombined/data.yaml"
+yaml_file = "/cephfs/work/rithvik/datasets/datasets/Sept2025Dataset/dataset.yaml"
 with open(yaml_file, "r", encoding="utf-8") as f:
     classes = yaml.safe_load(f)["names"]
 
@@ -66,7 +66,7 @@ for label in labels:
 
     labels_df.loc[label.stem] = lbl_counter
 
-labels_df = labels_df.fillna(0.0)
+labels_df = labels_df.fillna(0.0).infer_objects(copy=False)
 
 # Calculate and print total label counts
 print("Total label counts across the dataset:")
@@ -87,8 +87,8 @@ folds = [f"split_{n}" for n in range(1, ksplit +1)]
 folds_df = pd.DataFrame(index=index, columns=folds)
 
 for i, (train,val) in enumerate(kfolds, start=1):
-    folds_df[f"split_{i}"].loc[labels_df.iloc[train].index] = "train"
-    folds_df[f"split_{i}"].loc[labels_df.iloc[val].index] = "val"
+    folds_df.loc[labels_df.iloc[train].index, f"split_{i}"] = "train"
+    folds_df.loc[labels_df.iloc[val].index, f"split_{i}"] = "val"
 
 fold_lbl_distrb = pd.DataFrame(index=folds, columns=cls_idx)
 
@@ -114,7 +114,7 @@ for split in folds_df.columns:
         (split_dir / "train" / "labels").mkdir(parents=True, exist_ok=True)
         (split_dir / "val" / "images").mkdir(parents=True, exist_ok=True)
         (split_dir / "val" / "labels").mkdir(parents=True, exist_ok=True)
-
+    print(f"Created directories for {split}")
     # Create dataset YAML files
     dataset_yaml = split_dir / f"{split}_dataset.yaml"
     ds_yamls.append(dataset_yaml)
@@ -129,12 +129,15 @@ for split in folds_df.columns:
             },
             ds_y,
         )
-
+    print(f"Created dataset YAML")
 for image, label in zip(images, labels):
     # Check if the label file actually exists before proceeding (robustness)
     if not label.exists():
         print(f"Skipping copy for {image.name} as label {label.name} was expected but not found.")
         continue # Skip this pair if the label file is unexpectedly missing
+    if not image.exists():
+        print(f"Skipping copy for {label.name} as image {image.name} was expected but not found.")
+        continue # Skip this pair if the image file is unexpectedly missing
 
     # Ensure stems match before copying (extra safety check)
     if image.stem != label.stem:
@@ -167,7 +170,7 @@ path = "./OE_CL_Processing/pre_trained/weights/best.pt" #path to pre trained YOL
 model = YOLO(path, task='detect')
 results = {}
 
-batch = 8
+batch = 4
 project = "YOLO/k_folds_cross_val_m"
 epochs = 200
 
@@ -179,30 +182,3 @@ for k in range(ksplit):
 
 
 
-    def crop_image(image_path, crop_size, overlap):
-        """
-        Crop an input image into smaller square images with a specified crop size and overlap.
-
-        Args:
-            image_path (str or Path): Path to the input image.
-            crop_size (int): Size of the square crop (e.g., 256 for 256x256 crops).
-            overlap (int): Overlap between crops in pixels.
-
-        Returns:
-            List of cropped images as PIL.Image objects.
-        """
-
-        image = Image.open(image_path)
-        width, height = image.size
-        crops = []
-
-        step = crop_size - overlap
-        for top in range(0, height, step):
-            for left in range(0, width, step):
-                # Ensure the crop doesn't exceed the image boundaries
-                right = min(left + crop_size, width)
-                bottom = min(top + crop_size, height)
-                crop = image.crop((left, top, right, bottom))
-                crops.append(crop)
-
-        return crops
