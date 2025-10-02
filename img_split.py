@@ -112,7 +112,7 @@ def process_dataset(image_dir, label_dir, output_dir, crop_size, padding):
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Find all image files
-    image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}
+    image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tif'}
     image_files = [f for f in image_dir.iterdir() if f.suffix.lower() in image_extensions]
 
     for image_path in tqdm(image_files, desc="Processing images"):
@@ -125,8 +125,8 @@ def process_dataset(image_dir, label_dir, output_dir, crop_size, padding):
 def main():
     
     CONFIG = {
-        "image_dir": "/cephfs/work/rithvik/datasets/datasets/NatCombined/images/train/",
-        "label_dir": "/cephfs/work/rithvik/datasets/datasets/NatCombined/labels/train/",
+        "image_dir": "/cephfs/work/rithvik/datasets/datasets/BHE/2024_GBA/images/",
+        "label_dir": "/cephfs/work/rithvik/datasets/datasets/BHE/2024_GBA/labels/",
         "output_dir": "/cephfs/work/rithvik/datasets/datasets/NatCombined/TEST_cropped/",
         "crop_size": 1024,
         "padding": 50
