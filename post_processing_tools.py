@@ -13,6 +13,7 @@ import pandas as pd
 import geopandas as gpd
 import numpy as np
 import cv2
+import os
 import rasterio
 from shapely.geometry import Point, box as shp_box
 import pyproj
@@ -48,8 +49,8 @@ def load_models(model_type, model_version):
         return [model]  # Return as list for consistent handling
     elif model_type == 'kfolds':
         k_fold_models = []
-        model_dir = Path(f"./OE_CL_Processing/k_folds_cross_val_{model_version}") #change to correct directory
-
+        model_dir = Path(f"/home/rithvik/CL_test/YOLO/k_folds_cross_val_{model_version}") #change to correct directory
+        print(f"Loading k-fold models from {model_dir}")
         for k in range(5):
             model_path = model_dir / f"split_{k+1}" / "weights" / "best.pt"
             if model_path.exists():
@@ -59,14 +60,14 @@ def load_models(model_type, model_version):
         return None  # RCNN doesn't need model loading in the same way
     
     
-def get_image_paths(image_dir):
+def get_image_paths(image_source):
     """
-    Get list of image paths
+    Get list of image paths from either a directory or a text file
     
     Parameters
     ----------
-    image_dir : str
-        Directory containing images
+    image_source : str
+        Directory containing images OR text file with image paths
     
     Returns
     ----------
@@ -74,8 +75,41 @@ def get_image_paths(image_dir):
         List of image file paths
     """
     image_files = []
-    for ext in ['.png', '.tif', '.tiff']:
-        image_files.extend(list(Path(image_dir).glob(f'*{ext}')))
+    
+    # Check if input is a text file
+    if os.path.isfile(image_source) and image_source.endswith('.txt'):
+        print(f"Reading image paths from file: {image_source}")
+        try:
+            with open(image_source, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and line.lower().endswith(('.png', '.tif', '.tiff')):
+                        # Handle relative paths (like ./images/file.tif)
+                        if line.startswith('./'):
+                            # Make path relative to the text file location
+                            base_dir = Path(image_source).parent
+                            line = str(base_dir / line[2:])  # Remove './' prefix
+                        
+                        # Convert to Path object and ensure it exists
+                        image_path = Path(line)
+                        if image_path.exists():
+                            image_files.append(image_path)
+                        else:
+                            print(f"Warning: Image file not found: {line}")
+        except Exception as e:
+            print(f"Error reading image list file {image_source}: {e}")
+            return []
+    
+    # Check if input is a directory
+    elif os.path.isdir(image_source):
+        print(f"Reading images from directory: {image_source}")
+        for ext in ['.png', '.tif', '.tiff']:
+            image_files.extend(list(Path(image_source).glob(f'*{ext}')))
+    
+    else:
+        print(f"Error: {image_source} is neither a valid directory nor a .txt file")
+        return []
+    
     print(f"Found {len(image_files)} images")
     return sorted(image_files)  # Sort for consistent ordering
 
@@ -412,7 +446,8 @@ def calculate_iou(box1, box2):
 
 def post_processing_analysis(pred_path, truth_path, image_path, output_dir, pipeline_shp_path=None, found_shp_file=None, 
                                max_distance=100, truth_is_YOLO=True, point_distance_tolerance=10, 
-                               pred_confidences=None, fp_confidence=0.79, testing=False, save_images=True):
+                               pred_confidences=None, fp_confidence=0.79, testing=False, save_images=True, dummy=False,
+                               preloaded_buildings=None):
     """
     Analyzes building detections, comparing predictions against ground truth with special handling for points and boxes.
     
@@ -482,10 +517,13 @@ def post_processing_analysis(pred_path, truth_path, image_path, output_dir, pipe
     inverse_transform = None
     all_testing_buildings_filtered = gpd.GeoDataFrame() # Initialize as empty GeoDataFrame
     
+    # Calculate inverse transform for geotiff files (needed for pipeline visualization)
+    if is_geotiff and transform is not None:
+        inverse_transform = ~transform
+    
     if testing and is_geotiff:
         # Load shapefile data for found and removed buildings
-        found_buildings, removed_buildings = load_shapefiles_for_testing(crs, found_shp_file=found_shp_file)
-        inverse_transform = ~transform if transform else None
+        found_buildings, removed_buildings = load_shapefiles_for_testing(crs, found_shp_file=found_shp_file, preloaded_buildings=preloaded_buildings)
         
         all_testing_buildings = None 
         
@@ -594,28 +632,29 @@ def post_processing_analysis(pred_path, truth_path, image_path, output_dir, pipe
             ul_x, ul_y = transform * (x1, y1) # Upper Left
             lr_x, lr_y = transform * (x2, y2) # Lower Right
 
-            # Extract timestamp from image filename (format: regionid_customer_id_image_id_timestamp)
-            timestamp_part = image_path.stem.split('_')[-1] if '_' in image_path.stem else 'null'
-            image_id = image_path.stem.split('_')[2] if '_' in image_path.stem else 'null'
-            removed_geo.append({
-                'id': 'null',
-                'model_version': 'YOLOv11',
-                'cycle_start': '2025-02-01 00:00:00',
-                'cycle_end': '2025-04-01 00:00:00',
-                'project_id': '85',
-                'model_geometry': f'POLYGON(({ul_x} {ul_y}, {lr_x} {ul_y}, {lr_x} {lr_y}, {ul_x} {lr_y}, {ul_x} {ul_y}))',
-                'model_class': 'removed',
-                'insert_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'detection_date': timestamp_part,  # Extract timestamp from filename
-                'reference_date': 'null',
-                'detection_image': image_id,
-                'reference_image_id': 'null',
-                'reported_geometry': 'null',
-                'reported_class': 'null',
-                'reported_timestamp': 'null',
-                'confirmation_status': 'null',
-                'confimed_by': 'null',
-            })
+            if dummy:
+                # Extract timestamp from image filename (format: regionid_customer_id_image_id_timestamp)
+                timestamp_part = image_path.stem.split('_')[-1] if '_' in image_path.stem else 'null'
+                image_id = image_path.stem.split('_')[2] if '_' in image_path.stem else 'null'
+                removed_geo.append({
+                    'id': 'null',
+                    'model_version': 'YOLOv11',
+                    'cycle_start': '2025-02-01 00:00:00',
+                    'cycle_end': '2025-04-01 00:00:00',
+                    'project_id': '85',
+                    'model_geometry': f'POLYGON(({ul_x} {ul_y}, {lr_x} {ul_y}, {lr_x} {lr_y}, {ul_x} {lr_y}, {ul_x} {ul_y}))',
+                    'model_class': 'removed',
+                    'insert_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'detection_date': timestamp_part,  # Extract timestamp from filename
+                    'reference_date': 'null',
+                    'detection_image': image_id,
+                    'reference_image_id': 'null',
+                    'reported_geometry': 'null',
+                    'reported_class': 'null',
+                    'reported_timestamp': 'null',
+                    'confirmation_status': 'null',
+                    'confimed_by': 'null',
+                })
 
     # --- 8. PROCESS REMOVED BUILDINGS SHAPEFILE ---
     if save_images and testing and is_geotiff and removed_buildings is not None:
@@ -658,27 +697,28 @@ def post_processing_analysis(pred_path, truth_path, image_path, output_dir, pipe
             ul_x, ul_y = transform * (x1, y1)  # Upper Left
             lr_x, lr_y = transform * (x2, y2)  # Lower Right
             
-            timestamp_part = image_path.stem.split('_')[-1] if '_' in image_path.stem else 'null'
-            image_id = image_path.stem.split('_')[2] if '_' in image_path.stem else 'null'
-            new_geo.append({
-                'id': 'null',
-                'model_version': 'YOLOv11',
-                'cycle_start': '2025-02-01 00:00:00',
-                'cycle_end': '2025-04-01 00:00:00',
-                'project_id': '85',
-                'model_geometry': f'POLYGON(({ul_x} {ul_y}, {lr_x} {ul_y}, {lr_x} {lr_y}, {ul_x} {lr_y}, {ul_x} {ul_y}))',
-                'model_class': 'new',
-                'insert_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'detection_date': timestamp_part,
-                'reference_date': 'null',
-                'detection_image': image_id,
-                'reference_image_id': 'null',
-                'reported_geometry': 'null',
-                'reported_class': 'null',
-                'reported_timestamp': 'null',
-                'confirmation_status': 'null',
-                'confimed_by': 'null',
-            })
+            if dummy:
+                timestamp_part = image_path.stem.split('_')[-1] if '_' in image_path.stem else 'null'
+                image_id = image_path.stem.split('_')[2] if '_' in image_path.stem else 'null'
+                new_geo.append({
+                    'id': 'null',
+                    'model_version': 'YOLOv11',
+                    'cycle_start': '2025-02-01 00:00:00',
+                    'cycle_end': '2025-04-01 00:00:00',
+                    'project_id': '85',
+                    'model_geometry': f'POLYGON(({ul_x} {ul_y}, {lr_x} {ul_y}, {lr_x} {lr_y}, {ul_x} {lr_y}, {ul_x} {ul_y}))',
+                    'model_class': 'new',
+                    'insert_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'detection_date': timestamp_part,
+                    'reference_date': 'null',
+                    'detection_image': image_id,
+                    'reference_image_id': 'null',
+                    'reported_geometry': 'null',
+                    'reported_class': 'null',
+                    'reported_timestamp': 'null',
+                    'confirmation_status': 'null',
+                    'confimed_by': 'null',
+                })
     
     # --- 11. PROCESS FOUND BUILDINGS SHAPEFILE ---
     if save_images and testing and is_geotiff and found_buildings is not None:
@@ -698,7 +738,7 @@ def post_processing_analysis(pred_path, truth_path, image_path, output_dir, pipe
         )
         found_box_matches["matching_boxes"] = matching_indices
     
-    # ---  COUNT SHAPEFILE OBJECTS ACTUALLY MATCHED BY MODEL PREDICTIONS ---
+    # ---  (11a) COUNT SHAPEFILE OBJECTS ACTUALLY MATCHED BY MODEL PREDICTIONS ---
     shapefile_objects_actually_matched_by_model_count = 0
     pred_polygons_for_check = []
     if testing and is_geotiff and not all_testing_buildings_filtered.empty and transform is not None:
@@ -728,7 +768,7 @@ def post_processing_analysis(pred_path, truth_path, image_path, output_dir, pipe
                                 break # Count this shapefile object once
                         except Exception:
                             pass 
-    # --- IDENTIFY NEW/REMOVED SHAPEFILE BUILDINGS MISSED BY THE MODEL ---
+    # --- (11b) IDENTIFY NEW/REMOVED SHAPEFILE BUILDINGS MISSED BY THE MODEL ---
     count_new_sf_buildings = 0
     if testing and is_geotiff and not all_testing_buildings_filtered.empty and transform is not None:
         if not all_testing_buildings_filtered.empty:
@@ -1009,16 +1049,130 @@ def load_truth_boxes(truth_path, truth_is_YOLO, width, height):
     else:
         return truth_boxes_raw
 
-def load_shapefiles_for_testing(crs, found_shp_file):
+# --- SHAPEFILE LOADING AND FILTERING ---
+
+def get_user_filter_preferences():
     """
-    Loads found and removed building shapefiles
+    Get user preferences for shapefile filtering
+    
+    Returns:
+    --------
+    dict or None : Dictionary of types to exclude, or None if no filtering desired
+    """
+
+    
+    # Default exclusion types
+    default_excludes = {
+        'Athletic Field': 'sports facilities',
+        'Golf Course': 'recreational facilities', 
+        'Park': 'public recreational spaces',
+        'Playground': 'recreational areas'
+    }
+    
+    print("\nDefault building types to exclude:")
+    for i, (type_name, description) in enumerate(default_excludes.items(), 1):
+        print(f"  {i}. {type_name} ({description})")
+    
+    while True:
+        use_default = input("\nUse default exclusions? (y/n): ").strip().lower()
+        if use_default == 'y':
+            return default_excludes
+        elif use_default == 'n':
+            break
+        else:
+            print("Invalid input. Please enter 'y' or 'n'.")
+    
+    # Custom exclusions
+    print("\nEnter building types to exclude (one per line, empty line to finish):")
+    custom_excludes = {}
+    while True:
+        type_input = input("Building type: ").strip()
+        if not type_input:
+            break
+        description = input(f"Description for '{type_input}' (optional): ").strip()
+        if not description:
+            description = "excluded type"
+        custom_excludes[type_input] = description
+    
+    return custom_excludes if custom_excludes else None
+
+def preload_and_filter_shapefiles(crs, exclude_types=None):
+    """
+    Pre-load and filter gas transmission shapefiles once before processing multiple images
+    
+    Parameters:
+    -----------
+    crs : pyproj.CRS
+        Coordinate Reference System to convert shapefiles to
+    exclude_types : dict or list, optional
+        Building types to exclude from filtering
+    
+    Returns:
+    --------
+    tuple : (found_buildings, removed_buildings)
+        Pre-loaded and filtered GeoDataFrames
+    """
+    found_buildings, removed_buildings = None, None
+    
+    try:
+        
+        shp1_path = "/cephfs/work/rithvik/OE_CL_shps/gas_transmission/gas_transmission.gt_building_exi_extent.shp"
+        shp2_path = "/cephfs/work/rithvik/OE_CL_shps/gas_transmission/gas_transmission.gt_building_exi_location.shp"
+        
+        print("Pre-loading and filtering gas transmission shapefiles...")
+        
+        # Load and filter building types from both shapefiles
+        if exclude_types is not None:
+            extent_buildings = filter_building_types(shp1_path, exclude_types=exclude_types)
+            location_buildings = filter_building_types(shp2_path, exclude_types=exclude_types)
+        else:
+            print("Loading shapefiles without filtering...")
+            extent_buildings = gpd.read_file(shp1_path)
+            location_buildings = gpd.read_file(shp2_path)
+            print(f"Loaded {len(extent_buildings)} features from extent shapefile")
+            print(f"Loaded {len(location_buildings)} features from location shapefile")
+        
+        # Combine both shapefiles
+        gdfs_to_concat = []
+        if extent_buildings is not None and not extent_buildings.empty:
+            gdfs_to_concat.append(extent_buildings)
+        if location_buildings is not None and not location_buildings.empty:
+            gdfs_to_concat.append(location_buildings)
+            
+        if gdfs_to_concat:
+            # Concatenate the filtered shapefiles
+            found_buildings = pd.concat(gdfs_to_concat, ignore_index=True)
+            
+            # Ensure CRS matches the target CRS
+            if found_buildings.crs != crs:
+                print(f"Converting shapefile CRS from {found_buildings.crs} to {crs}")
+                found_buildings = found_buildings.to_crs(crs)
+            
+            print(f"Pre-loaded {len(found_buildings)} buildings from gas transmission shapefiles")
+        else:
+            print("No buildings loaded from gas transmission shapefiles")
+            
+        removed_buildings = None
+            
+    except Exception as e:
+        print(f"Error pre-loading gas transmission shapefiles: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    return found_buildings, removed_buildings
+
+def load_shapefiles_for_testing(crs, found_shp_file, preloaded_buildings=None):
+    """
+    Loads found and removed building shapefiles, with option to use pre-loaded buildings for efficiency
     
     Parameters
     ----------
     crs : pyproj.CRS
         Coordinate Reference System of the image
     found_shp_file : str
-        Path to the found buildings shapefile
+        Path to the found buildings shapefile (currently unused when using preloaded_buildings)
+    preloaded_buildings : tuple, optional
+        Pre-loaded (found_buildings, removed_buildings) from preload_and_filter_shapefiles()
     
     Returns
     -------
@@ -1027,27 +1181,56 @@ def load_shapefiles_for_testing(crs, found_shp_file):
     removed_buildings : GeoDataFrame
         GeoDataFrame of removed buildings
     """
+    # Use preloaded buildings if available 
+    if preloaded_buildings is not None:
+        return preloaded_buildings
+    
+    # Fallback to loading shapefiles 
     found_buildings, removed_buildings = None, None
     
     try:
-        # Load the found buildings shapefile
-        found_buildings_gdf = gpd.read_file(found_shp_file)
-
-        # Ensure CRS matches the image CRS
-        if found_buildings_gdf.crs != crs:
-            found_buildings_gdf = found_buildings_gdf.to_crs(crs)
         
-        # Get specific types
-        type_field = 'type'  # Default field name
-        unique_types = found_buildings_gdf[type_field].unique()
+        shp1_path = "/cephfs/work/rithvik/OE_CL_shps/gas_transmission/gas_transmission.gt_building_exi_extent.shp"
+        shp2_path = "/cephfs/work/rithvik/OE_CL_shps/gas_transmission/gas_transmission.gt_building_exi_location.shp"
         
-        if 'new' in unique_types:
-            found_buildings = found_buildings_gdf[found_buildings_gdf[type_field] == 'new']
-        if 'removed' in unique_types:
-            removed_buildings = found_buildings_gdf[found_buildings_gdf[type_field] == 'removed']
+        # Define building types to exclude with descriptions
+        exclude_types = {
+            'Athletic Field': 'sports facilities',
+            'Golf Course': 'recreational facilities', 
+            'Park': 'public recreational spaces',
+            'Playground': 'recreational areas'
+        }
+        
+        # Load and filter unwanted building types from both shapefiles
+        print("Loading and filtering gas transmission shapefiles (consider using preloaded_buildings for better performance)...")
+        extent_buildings = filter_building_types(shp1_path, exclude_types=exclude_types)
+        location_buildings = filter_building_types(shp2_path, exclude_types=exclude_types)
+        
+        # Combine both shapefiles
+        gdfs_to_concat = []
+        if extent_buildings is not None and not extent_buildings.empty:
+            gdfs_to_concat.append(extent_buildings)
+        if location_buildings is not None and not location_buildings.empty:
+            gdfs_to_concat.append(location_buildings)
+            
+        if gdfs_to_concat:
+            # Concatenate the filtered shapefiles
+            found_buildings = pd.concat(gdfs_to_concat, ignore_index=True)
+            
+            # Ensure CRS matches the image CRS
+            if found_buildings.crs != crs:
+                found_buildings = found_buildings.to_crs(crs)
+            
+            print(f"Loaded {len(found_buildings)} buildings from gas transmission shapefiles (after filtering)")
+        else:
+            print("No buildings loaded from gas transmission shapefiles")
+            
+        removed_buildings = None
             
     except Exception as e:
-        print(f"Error loading buildings shapefile: {e}")
+        print(f"Error loading gas transmission shapefiles: {e}")
+        import traceback
+        traceback.print_exc()
     
     return found_buildings, removed_buildings
 
@@ -1758,6 +1941,17 @@ def visualize_pipeline_and_buffer(image, pipeline_shp_path, crs, transform, inve
                                 bounds_geo, height, width, max_distance):
     """Visualize pipeline and buffer zone on the image"""
     try:
+        # Check if required parameters are None
+        if transform is None:
+            print("Warning: transform is None, skipping pipeline visualization")
+            return image
+        if inverse_transform is None:
+            print("Warning: inverse_transform is None, skipping pipeline visualization")
+            return image
+        if bounds_geo is None:
+            print("Warning: bounds_geo is None, skipping pipeline visualization")
+            return image
+            
         # Load pipeline shapefile
         pipeline_gdf = gpd.read_file(pipeline_shp_path)
         
@@ -1836,6 +2030,10 @@ def create_pipeline_buffer(pipeline_geom, crs, max_distance):
 
 def create_buffer_mask(buffer_geom, transform, height, width):
     """Create a mask for the buffer area"""
+    if transform is None:
+        print("Warning: transform is None in create_buffer_mask")
+        return np.zeros((height, width), dtype=np.uint8)
+        
     buffer_mask = np.zeros((height, width), dtype=np.uint8)
     step = 5  # Check every 5 pixels for performance
     
@@ -1851,6 +2049,10 @@ def create_buffer_mask(buffer_geom, transform, height, width):
 
 def draw_pipeline(pipeline_geom, inverse_transform, image):
     """Draw pipeline on the image"""
+    if inverse_transform is None:
+        print("Warning: inverse_transform is None in draw_pipeline")
+        return
+        
     if pipeline_geom.geom_type == 'LineString':
         pixel_coords = []
         for x, y in pipeline_geom.coords:
@@ -1890,8 +2092,16 @@ def calculate_distance(point, line_geom, crs):
         return distance
 
 def process_images_with_saved_predictions(image_files, predictions, confidences, output_dir, use_pipeline, pipeline_path, found_shp_file,
-                                          max_distance, fp_confidence, model_version, model_type, testing=False, save_images=True):
-    """Process images using saved predictions"""
+                                          max_distance, fp_confidence, model_version, model_type, testing=False, save_images=True, 
+                                          preloaded_buildings=None):
+    """Process images using saved predictions with optional pre-loaded shapefiles for efficiency"""
+    
+    # If preloaded_buildings is provided, we can skip shapefile loading for each image
+    if preloaded_buildings is not None:
+        print("Using pre-loaded and filtered shapefiles for efficient processing...")
+    else:
+        print("Note: Consider using preload_and_filter_shapefiles() for better performance when processing many images")
+    
     # Create output directory with timestamp so you don't overwrite previous results
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1938,7 +2148,8 @@ def process_images_with_saved_predictions(image_files, predictions, confidences,
         pred_confidences = confidences[str(img_path)] if str(img_path) in confidences else None
         
         # Get truth path
-        truth_path = Path(img_path.parent.parent) / 'labels' / f"{img_path.stem}.txt"
+        # truth_path = Path(img_path.parent.parent) / 'labels' / f"{img_path.stem}.txt"
+        truth_path = Path(img_path.parent.parent.parent)/ '2024' / 'labels' / f"{img_path.stem}.txt"
         if not truth_path.exists():
             print(f"Warning: No truth file found: {truth_path}")
             continue
@@ -1970,7 +2181,8 @@ def process_images_with_saved_predictions(image_files, predictions, confidences,
             pred_confidences=pred_confidences,
             fp_confidence=fp_confidence,
             testing=testing,
-            save_images=save_images
+            save_images=save_images,
+            preloaded_buildings=preloaded_buildings
         )
         
         # Collect area information and update counts (regardless of save_images)
@@ -2381,9 +2593,81 @@ def generate_sw_predictions(image_files, output_dir, models, conf_threshold, win
 
 
 # --- OTHER FUNCTIONS ---
+def filter_building_types(shapefile_path, exclude_types=None):
+    """
+    Filter out specified building types from a shapefile based on the 'Type' or 'type' field.
+    
+    Parameters:
+    -----------
+    shapefile_path : str
+        Path to the shapefile
+    exclude_types : list or dict, optional
+        Building types to exclude. Can be:
+        - List of strings: ['Athletic Field', 'Golf Course', 'Park']
+        - Dict mapping types to descriptions: {'Athletic Field': 'sports facilities', 'Golf Course': 'recreational', 'Park': 'public spaces'}
+        If None, defaults to ['Athletic Field']
+        
+    Returns:
+    --------
+    gdf : GeoDataFrame
+        Filtered GeoDataFrame without excluded building types
+    """
+    # Default exclusion list if none provided
+    if exclude_types is None:
+        exclude_types = ['Athletic Field']
+    
+    # Convert dict to list if dictionary provided
+    if isinstance(exclude_types, dict):
+        types_to_exclude = list(exclude_types.keys())
+        type_descriptions = exclude_types
+    else:
+        types_to_exclude = exclude_types
+        type_descriptions = {t: 'excluded type' for t in types_to_exclude}
+    
+    # Read the shapefile
+    gdf = gpd.read_file(shapefile_path)
+    
+    # Check for Type field (with different cases)
+    type_field = None
+    if 'Type' in gdf.columns:
+        type_field = 'Type'
+    elif 'type' in gdf.columns:
+        type_field = 'type'
+    elif 'TYPE' in gdf.columns:
+        type_field = 'TYPE'
+    
+    if type_field:
+        # Create mask to exclude all specified types (case insensitive)
+        mask = pd.Series([True] * len(gdf), index=gdf.index)
+        removed_by_type = {}
+        
+        for exclude_type in types_to_exclude:
+            type_mask = gdf[type_field].str.lower().str.contains(exclude_type.lower(), na=False)
+            removed_count = type_mask.sum()
+            if removed_count > 0:
+                removed_by_type[exclude_type] = removed_count
+                mask = mask & ~type_mask
+        
+        filtered_gdf = gdf[mask]
+        total_removed = len(gdf) - len(filtered_gdf)
+        
+        if total_removed > 0:
+            print(f"Filtered out {total_removed} features from {len(gdf)} total:")
+            for type_name, count in removed_by_type.items():
+                description = type_descriptions.get(type_name, 'excluded type')
+                print(f"  - {count} {type_name} ({description})")
+        else:
+            print(f"No excluded types found in {len(gdf)} features (no filtering needed)")
+            
+        return filtered_gdf
+    else:
+        print(f"Warning: No 'Type'/'type' field found in shapefile. Available columns: {list(gdf.columns)}")
+        return gdf
+
 def filter_athletic_fields(shapefile_path):
     """
-    Filter out athletic fields from a shapefile based on the 'Type' field.
+    Filter out athletic fields from a shapefile based on the 'Type' or 'type' field.
+    This is a wrapper around filter_building_types for backward compatibility.
     
     Parameters:
     -----------
@@ -2395,19 +2679,7 @@ def filter_athletic_fields(shapefile_path):
     gdf : GeoDataFrame
         Filtered GeoDataFrame without athletic fields
     """
-    # Read the shapefile
-    gdf = gpd.read_file(shapefile_path)
-    
-    # Check if the 'Type' field exists
-    if 'Type' in gdf.columns:
-        # Filter out athletic fields (case insensitive)
-        mask = ~gdf['Type'].str.lower().str.contains('athletic field', na=False)
-        filtered_gdf = gdf[mask]
-        print(f"Filtered out {len(gdf) - len(filtered_gdf)} athletic fields from {len(gdf)} total features")
-        return filtered_gdf
-    else:
-        print("Warning: 'Type' field not found in shapefile")
-        return gdf
+    return filter_building_types(shapefile_path, exclude_types=['Athletic Field'])
     
 def count_type(shapefile_path, query):
     """
@@ -2439,8 +2711,8 @@ def count_type(shapefile_path, query):
     else:
         print("Warning: 'Type' field not found in shapefile")
         return 0
-    
-def analyze_single_image(image_files, output_dir, pipeline_path, predictions, confidences, img_idx=0, use_pipeline=True, max_distance=100, fp_confidence = 0.5): # taken directly from original code so might need updating 
+
+def analyze_single_image(image_files, output_dir, pipeline_path, predictions, confidences, img_idx=0, use_pipeline=True, max_distance=100, fp_confidence = 0.5, dummy=False, preloaded_buildings=None): # taken directly from original code so might need updating
     """Analyze a single image in detail"""
     if img_idx >= len(image_files):
             print(f"Image index {img_idx} is out of range (max: {len(image_files)-1})")
@@ -2485,7 +2757,9 @@ def analyze_single_image(image_files, output_dir, pipeline_path, predictions, co
         max_distance=max_distance,
         pred_confidences=pred_confidences,
         testing=False,
-        fp_confidence=fp_confidence  
+        fp_confidence=fp_confidence,
+        dummy=dummy,
+        preloaded_buildings=preloaded_buildings
     )
     
     
