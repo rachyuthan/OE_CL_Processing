@@ -19,6 +19,7 @@ from shapely.geometry import Point, box as shp_box
 import pyproj
 from shapely.ops import transform as shapely_transform, nearest_points
 from tqdm import tqdm
+import json
 from sys import path
 from evaluation import (create_final_histogram, create_final_pie_chart, 
                   calculate_box_metrics, non_max_suppression)
@@ -114,7 +115,7 @@ def get_image_paths(image_source):
     return sorted(image_files)  # Sort for consistent ordering
 
 
-def generate_predictions(models, image_files, output_dir, model_type, conf_threshold):
+def generate_predictions(models, image_files, output_dir, model_type, conf_threshold): # Make change for uniformity
     """
     Generate predictions for all images and save them
     
@@ -2229,7 +2230,7 @@ def process_images_with_saved_predictions(image_files, predictions, confidences,
                 num_sf_objects_this_image = 0
                 if reported_changes is not None and not reported_changes.empty:
                     num_sf_objects_this_image = len(reported_changes)
-                    print(f" - Flagged image {img_path.name}: All {num_sf_objects_this_image} shapefile objects within bounds are considered found.")
+                    
                 
                 total_shapefile_objects_considered_found += num_sf_objects_this_image
                 shapefile_objects_auto_found_in_flagged_images += num_sf_objects_this_image
@@ -2574,6 +2575,10 @@ def generate_sw_predictions(image_files, output_dir, models, conf_threshold, win
         )
     else:
         print(f"Loading predictions from: {prediction_dir}")
+        # Handle both single image and list of images
+        if not isinstance(image_files, list):
+            image_files = [image_files]
+            
         for img_path in image_files:
             pred_path = prediction_dir / f"{img_path.stem}_pred.npy"
             conf_path = prediction_dir / f"{img_path.stem}_conf.npy"
@@ -2948,3 +2953,112 @@ def debug_point_box_matching(image_files, output_path, predictions, img_idx=0, m
     analyze_single_image(predictions, img_idx, True, max_distance)
     
     return debug_dir
+
+def predictions_to_geojson(image_file, predictions, confidences, output_path=None):
+    """
+    Convert predictions to GeoJSON in CRS EPSG:4326.
+    
+    Args:
+        image_file (str or Path): Path to the georeferenced image file (GeoTIFF).
+        predictions (dict): Dictionary with image paths as keys and prediction boxes as values.
+        confidences (dict): Dictionary with image paths as keys and confidence scores as values.
+        output_path (str or Path, optional): Path to save the GeoJSON file. If None, returns GeoJSON dict.
+    
+    Returns:
+        dict or None: GeoJSON dictionary if output_path is None, otherwise None (saves to file).
+    
+    Raises:
+        ValueError: If image is not a GeoTIFF or doesn't have geospatial information.
+    """
+    image_file = Path(image_file)
+    
+    # Check if image is a GeoTIFF
+    if not str(image_file).lower().endswith(('.tif', '.tiff')):
+        raise ValueError(f"Image must be a GeoTIFF (.tif or .tiff): {image_file}")
+    
+    # Get predictions for this image
+    image_key = str(image_file)
+    if image_key not in predictions:
+        raise ValueError(f"No predictions found for image: {image_file}")
+    
+    pred_boxes = predictions[image_key]
+    pred_confidences = confidences.get(image_key, [])
+    
+    # Get geotransform and CRS from GeoTIFF
+    try:
+        with rasterio.open(image_file) as src:
+            transform = src.transform
+            crs = src.crs
+    except Exception as e:
+        raise ValueError(f"Failed to read geospatial information from image: {e}")
+    
+    if crs is None:
+        raise ValueError(f"Image does not have a valid CRS: {image_file}")
+    
+    # Create transformer to EPSG:4326 if needed
+    target_crs = pyproj.CRS.from_epsg(4326)
+    need_transform = crs != target_crs
+    
+    if need_transform:
+        transformer = pyproj.Transformer.from_crs(
+            crs, target_crs, always_xy=True
+        )
+    
+    # Convert bounding boxes to geographic coordinates
+    features = []
+    
+    for i, box in enumerate(pred_boxes):
+        x1, y1, x2, y2 = map(float, box)
+        
+        # Transform pixel coordinates to geographic coordinates
+        ul_x, ul_y = transform * (x1, y1)  # Upper left
+        lr_x, lr_y = transform * (x2, y2)  # Lower right
+        
+        # Create box geometry in original CRS
+        building_box = shp_box(ul_x, lr_y, lr_x, ul_y)  # (minx, miny, maxx, maxy)
+        
+        # Transform to EPSG:4326 if needed
+        if need_transform:
+            building_box = shapely_transform(transformer.transform, building_box)
+        
+        # Get confidence score if available
+        confidence = float(pred_confidences[i]) if i < len(pred_confidences) else None
+        
+        # Create GeoJSON feature
+        feature = {
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [list(building_box.exterior.coords)]
+            },
+            "properties": {
+                "id": i,
+                "confidence": confidence,
+                "source_image": str(image_file.name),
+                "bbox_pixel": [x1, y1, x2, y2]
+            }
+        }
+        features.append(feature)
+    
+    # Create GeoJSON FeatureCollection
+    geojson = {
+        "type": "FeatureCollection",
+        "crs": {
+            "type": "name",
+            "properties": {
+                "name": "EPSG:4326"
+            }
+        },
+        "features": features
+    }
+    
+    # Save or return
+    if output_path is not None:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, 'w') as f:
+            json.dump(geojson, f, indent=2)
+        print(f"GeoJSON saved to: {output_path}")
+        return None
+    else:
+        return geojson
