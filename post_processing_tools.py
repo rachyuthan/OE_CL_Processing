@@ -2954,14 +2954,13 @@ def debug_point_box_matching(image_files, output_path, predictions, img_idx=0, m
     
     return debug_dir
 
-def predictions_to_geojson(image_file, predictions, confidences, output_path=None):
+def predictions_to_geojson(image_file, predictions, output_path=None):
     """
     Convert predictions to GeoJSON in CRS EPSG:4326.
     
     Args:
         image_file (str or Path): Path to the georeferenced image file (GeoTIFF).
         predictions (dict): Dictionary with image paths as keys and prediction boxes as values.
-        confidences (dict): Dictionary with image paths as keys and confidence scores as values.
         output_path (str or Path, optional): Path to save the GeoJSON file. If None, returns GeoJSON dict.
     
     Returns:
@@ -2982,7 +2981,6 @@ def predictions_to_geojson(image_file, predictions, confidences, output_path=Non
         raise ValueError(f"No predictions found for image: {image_file}")
     
     pred_boxes = predictions[image_key]
-    pred_confidences = confidences.get(image_key, [])
     
     # Get geotransform and CRS from GeoTIFF
     try:
@@ -3021,9 +3019,6 @@ def predictions_to_geojson(image_file, predictions, confidences, output_path=Non
         if need_transform:
             building_box = shapely_transform(transformer.transform, building_box)
         
-        # Get confidence score if available
-        confidence = float(pred_confidences[i]) if i < len(pred_confidences) else None
-        
         # Create GeoJSON feature
         feature = {
             "type": "Feature",
@@ -3033,7 +3028,6 @@ def predictions_to_geojson(image_file, predictions, confidences, output_path=Non
             },
             "properties": {
                 "id": i,
-                "confidence": confidence,
                 "source_image": str(image_file.name),
                 "bbox_pixel": [x1, y1, x2, y2]
             }
