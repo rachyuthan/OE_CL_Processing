@@ -3029,7 +3029,7 @@ def predictions_to_geojson(image_file, predictions, output_path=None):
             "properties": {
                 "id": i,
                 "source_image": str(image_file.name),
-                "bbox_pixel": [x1, y1, x2, y2]
+                # "bbox_pixel": [x1, y1, x2, y2]
             }
         }
         features.append(feature)
