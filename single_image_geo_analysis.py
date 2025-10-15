@@ -3,6 +3,8 @@ File to run inference on multiple images. Gives visualization of predictions alo
 with confidence scores and baseline comparison results."""
 from post_processing_tools import *
 from baseline_comparison import *
+from post_processing import *
+from flagging import *
 from pathlib import Path
 import cv2
 import pandas as pd
@@ -10,7 +12,7 @@ from datetime import datetime
 import shutil
 
 CONFIG = {
-   "output_dir": "./test/",
+   "output_dir": "./single_image/",
    "pipeline_path": "/cephfs/work/rithvik/OE_CL_shps/FullSystem/EGTS_Full_System.shp",
    # For multiple truth files (e.g., points and polygons), provide a list
    "baseline": [
@@ -18,13 +20,15 @@ CONFIG = {
        "/cephfs/work/rithvik/OE_CL_shps/EGTS Buildings/EGTS Buildings/Building Location.shp",  # location path
    ],
    # Input: either a single image path or a directory containing images
-   "input_images": "/cephfs/work/rithvik/datasets/datasets/BHE/2025Q1/images/18066479_141.tif",  # Directory or single file path
+   "input_images": "/cephfs/work/rithvik/datasets/datasets/BHE/geo_imgs_test/",  # Directory or single file path
    # Project metadata for CSV export
    "project_id": "85",
    "model_version": "YOLOv11m",
    "cycle_start": "2025-02-01 00:00:00",
    "cycle_end": "2025-04-01 00:00:00"
 }
+
+
 Path(CONFIG["output_dir"]).mkdir(parents=True, exist_ok=True)
 
 def is_georeferenced(image_path):
@@ -166,7 +170,31 @@ def create_building_record(box, transform, image_path, building_type, config):
     ul_x, ul_y = transform * (x1, y1)  # Upper Left
     lr_x, lr_y = transform * (x2, y2)  # Lower Right
     
-    image_id = image_path.stem
+    # Mapping of numerical IDs to filenames
+    mapping_str = """
+    452121     Maxar-50cm_SKYWATCH_25SEP08162820-S3DS_R1C2-200009812612_01_P001_1_px4oFlukr3.tif
+    452112     Maxar-50cm_SKYWATCH_25SEP08162820-S3DS_R1C1-200009812612_01_P001_0_BYIuWJ67y9.tif
+    452125     Maxar-50cm_SKYWATCH_25SEP08162820-S3DS_R1C3-200009812612_01_P001_2_BRgxfIJ9vh.tif
+    452189     Maxar-50cm_SKYWATCH_25SEP08162829-S3DS_R1C2-200009812586_01_P001_1_q4epLnOYnX.tif
+    452190     Maxar-50cm_SKYWATCH_25SEP08162829-S3DS_R1C3-200009812586_01_P001_2_0TvytxAlHg.tif
+    452188     Maxar-50cm_SKYWATCH_25SEP08162829-S3DS_R1C1-200009812586_01_P001_0_omjw2boqJK.tif
+    """
+    
+    # Parse mapping into dictionary: {filename_without_ext: numerical_id}
+    filename_to_id = {}
+    for line in mapping_str.strip().split('\n'):
+        parts = line.split()
+        if len(parts) >= 2:
+            numerical_id = parts[0]
+            filename = parts[1]
+            # Store both with and without extension
+            filename_to_id[filename] = numerical_id
+            filename_to_id[Path(filename).stem] = numerical_id
+    
+    # Get numerical ID for this image (fallback to filename if not in mapping)
+    image_filename = image_path.name
+    image_stem = image_path.stem
+    image_id = filename_to_id.get(image_filename, filename_to_id.get(image_stem, image_stem))
     
     return {
         'id': 'null',  # Will be assigned by database
@@ -186,6 +214,43 @@ def create_building_record(box, transform, image_path, building_type, config):
         'reported_timestamp': 'null',
         'confirmation_status': 'null',
         'confirmed_by': 'null',
+    }
+
+def create_building_analysis_record(flag, image_path):
+    # Mapping of numerical IDs to filenames
+    mapping_str = """
+    452121     Maxar-50cm_SKYWATCH_25SEP08162820-S3DS_R1C2-200009812612_01_P001_1_px4oFlukr3.tif
+    452112     Maxar-50cm_SKYWATCH_25SEP08162820-S3DS_R1C1-200009812612_01_P001_0_BYIuWJ67y9.tif
+    452125     Maxar-50cm_SKYWATCH_25SEP08162820-S3DS_R1C3-200009812612_01_P001_2_BRgxfIJ9vh.tif
+    452189     Maxar-50cm_SKYWATCH_25SEP08162829-S3DS_R1C2-200009812586_01_P001_1_q4epLnOYnX.tif
+    452190     Maxar-50cm_SKYWATCH_25SEP08162829-S3DS_R1C3-200009812586_01_P001_2_0TvytxAlHg.tif
+    452188     Maxar-50cm_SKYWATCH_25SEP08162829-S3DS_R1C1-200009812586_01_P001_0_omjw2boqJK.tif
+    """
+    
+    # Parse mapping into dictionary: {filename_without_ext: numerical_id}
+    filename_to_id = {}
+    for line in mapping_str.strip().split('\n'):
+        parts = line.split()
+        if len(parts) >= 2:
+            numerical_id = parts[0]
+            filename = parts[1]
+            # Store both with and without extension
+            filename_to_id[filename] = numerical_id
+            filename_to_id[Path(filename).stem] = numerical_id
+    
+    # Get numerical ID for this image (fallback to filename if not in mapping)
+    image_filename = image_path.name
+    image_stem = image_path.stem
+    image_id = filename_to_id.get(image_filename, filename_to_id.get(image_stem, image_stem))
+    return {
+        'id': 'null',  # Will be assigned by database
+        'analyzed_by': 'null',
+        'optical_image_id': image_id,
+        'analysis_start': 'null',
+        'analysis_end': 'null',
+        'status': 'null',
+        'ml_status': flag,
+        'project_id': '85',
     }
 
 def process_single_image(image_path, config):
@@ -212,7 +277,7 @@ def process_single_image(image_path, config):
     
     try:
         # Step 1: Generate predictions
-        print("\n[1/4] Generating predictions...")
+        print("\nGenerating predictions...")
         prediction, confidence = single_image_pred(
             model_type='kfolds',
             model_version='m',
@@ -223,7 +288,7 @@ def process_single_image(image_path, config):
         )
         
         # Step 2: Visualize predictions
-        print("[2/4] Creating visualization...")
+        print("\nCreating visualization...")
         visualize_predictions(
             image_file=image_path,
             predictions=prediction,
@@ -231,7 +296,7 @@ def process_single_image(image_path, config):
         )
         
         # Step 3: Convert predictions to GeoJSON
-        print("[3/4] Converting predictions to GeoJSON...")
+        print("\nConverting predictions to GeoJSON...")
         geojson_output_path = Path(config['output_dir']) / f"{image_path.stem}_predictions.geojson"
         predictions_to_geojson(
             image_file=image_path,
@@ -242,7 +307,7 @@ def process_single_image(image_path, config):
         print(f"  Saved: {geojson_output_path}")
         
         # Step 4: Run baseline comparison
-        print("[4/4] Running baseline comparison...")
+        print("\nRunning baseline comparison...")
         combined_geojson = baseline_comparison_geo(
             pred_geojson=geojson_output_path,
             truth_geojson=config['baseline'],
@@ -253,27 +318,43 @@ def process_single_image(image_path, config):
             point_distance_tolerance=10,
             save_images=False
         )
-        print(f"  Saved: {combined_geojson}")
-        
+
+        # Step 5: Filter new buildings by confidence
+
+        print("\nFiltering new buildings by confidence...")
+        filtered_geojson, _ = filter_false_positives_by_confidence(
+            geojson_path=combined_geojson,
+            fp_confidence_threshold=0.6,
+        )
+        print(f"  Saved: {filtered_geojson}")
         # Step 5: Extract new and removed buildings for CSV export
         print("\n[5/5] Extracting building records...")
         new_buildings = []
         removed_buildings = []
         
         # Load the comparison GeoJSON to extract new and removed buildings
-        comparison_gdf = gpd.read_file(combined_geojson)
+        comparison_gdf = gpd.read_file(filtered_geojson)
+        
+        # Read total count from GeoJSON metadata (more efficient than extracting all features)
+        with open(filtered_geojson, 'r') as f:
+            geojson_data = json.load(f)
+            total_count = geojson_data.get('properties', {}).get('total_features', len(comparison_gdf))
+            matched_count = geojson_data.get('properties', {}).get('Matched', 0)
+            new_count = geojson_data.get('properties', {}).get('New', 0)
+            removed_count = geojson_data.get('properties', {}).get('Removed', 0)
+        
+        
         
         # Get image transform for coordinate conversion
         with rasterio.open(image_path) as src:
             transform = src.transform
+            
         # Extract new buildings
         fp_features = comparison_gdf[comparison_gdf['type'] == 'New']
         print(f"  Found {len(fp_features)} new buildings")
         
         for idx, row in fp_features.iterrows():
             geom = row.geometry
-            # Convert geometry bounds back to pixel coordinates (approximate)
-            # Note: This is a simplified approach - you may want to store pixel coords in properties
             bounds = geom.bounds  # minx, miny, maxx, maxy in geographic coords
             
             # Convert back to pixel (inverse transform)
@@ -304,13 +385,14 @@ def process_single_image(image_path, config):
             removed_buildings.append(record)
         
         print(f"\n✓ Successfully processed {image_path.name}")
-        return new_buildings, removed_buildings, True
+        
+        return new_buildings, removed_buildings, total_count, True
         
     except Exception as e:
         print(f"\n✗ Error processing {image_path.name}: {e}")
         import traceback
         traceback.print_exc()
-        return [], [], False
+        return [], [], [], False
 
 def main():
     """
@@ -343,7 +425,7 @@ def main():
             shutil.rmtree(output_path)
             print(f"Deleted existing prediction folder: {output_path}")
 
-        new_buildings, removed_buildings, success = process_single_image(image_path, CONFIG)
+        new_buildings, removed_buildings, total_count, success = process_single_image(image_path, CONFIG)
 
         if success:
             all_new_buildings.extend(new_buildings)
@@ -351,6 +433,19 @@ def main():
             successful_images.append(image_path.name)
         else:
             failed_images.append(image_path.name)
+        flag = flagging(new_buildings, removed_buildings, total_count, criteria=0.3)
+        analysis_record = create_building_analysis_record(flag, image_path)
+        analysis_df = pd.DataFrame([analysis_record])
+        analysis_csv_path = Path(CONFIG['output_dir']) / "building_analysis.csv"  # Fixed filename
+
+        # Write header only if file doesn't exist
+        analysis_df.to_csv(
+            analysis_csv_path, 
+            mode='a',  # Always append
+            header=not analysis_csv_path.exists(),  # Header only if new file
+            index=False
+        )
+
     
     # Export combined CSV
     print("\n" + "="*80)
