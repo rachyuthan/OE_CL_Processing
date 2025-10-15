@@ -10,7 +10,7 @@ from datetime import datetime
 import shutil
 
 CONFIG = {
-   "output_dir": "./single_image/",
+   "output_dir": "./test/",
    "pipeline_path": "/cephfs/work/rithvik/OE_CL_shps/FullSystem/EGTS_Full_System.shp",
    # For multiple truth files (e.g., points and polygons), provide a list
    "baseline": [
@@ -18,7 +18,7 @@ CONFIG = {
        "/cephfs/work/rithvik/OE_CL_shps/EGTS Buildings/EGTS Buildings/Building Location.shp",  # location path
    ],
    # Input: either a single image path or a directory containing images
-   "input_images": "/cephfs/work/rithvik/datasets/datasets/BHE/geo_imgs_test/",  # Directory or single file path
+   "input_images": "/cephfs/work/rithvik/datasets/datasets/BHE/2025Q1/images/18066479_141.tif",  # Directory or single file path
    # Project metadata for CSV export
    "project_id": "85",
    "model_version": "YOLOv11m",

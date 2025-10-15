@@ -285,16 +285,20 @@ def filter_geojson_boxes_by_overlap(geo_boxes, gdf, overlap_threshold=0.7):
     
     return filtered_geo_boxes, filtered_gdf
 
-def classify_geo_boxes(geo_boxes, area_threshold=200, crs='EPSG:4326'):
+def classify_geo_boxes(geo_boxes, gdf=None, area_threshold=200, crs='EPSG:4326'):
     """
-    [GEOJSON ONLY] Separates geographic boxes into points and regular boxes based on area.
+    [GEOJSON ONLY] Separates geographic boxes into points and regular boxes based on geometry type.
     
     Parameters
     ----------
     geo_boxes : numpy array
         Array of bounding boxes in geographic coordinates [minx, miny, maxx, maxy]
+    gdf : GeoDataFrame, optional
+        GeoDataFrame with the geometries. If provided, uses actual geometry type
+        (Point vs Polygon/MultiPolygon) for classification. This is more accurate
+        than area-based classification.
     area_threshold : float
-        Area threshold in square meters for classifying as points
+        Area threshold in square meters for classifying as points (fallback if gdf not provided)
     crs : str or pyproj.CRS
         Coordinate reference system of the boxes
     
@@ -307,6 +311,23 @@ def classify_geo_boxes(geo_boxes, area_threshold=200, crs='EPSG:4326'):
     """
     point_indices = []
     box_indices = []
+    
+    # If GeoDataFrame provided, use actual geometry type (most accurate)
+    if gdf is not None:
+        from shapely.geometry import Point, MultiPoint
+        
+        for i, geom in enumerate(gdf.geometry):
+            if isinstance(geom, (Point, MultiPoint)):
+                point_indices.append(i)
+            else:
+                # Polygon, MultiPolygon, LineString, etc. are treated as boxes
+                box_indices.append(i)
+        
+        print(f"Classified by geometry type: {len(point_indices)} points, {len(box_indices)} polygons")
+        return point_indices, box_indices
+    
+    # Fallback: Area-based classification (less accurate, kept for backward compatibility)
+    print("Warning: GeoDataFrame not provided, using area-based classification (less accurate)")
     
     # Create transformer to a metric CRS for area calculation if needed
     source_crs = pyproj.CRS(crs)
@@ -476,9 +497,74 @@ def find_geo_box_point_pairs(geo_boxes, point_indices, box_indices, distance_thr
     
     return box_point_pairs, remaining_points, standalone_boxes
 
+def create_pipeline_buffer_gdf(pipeline_shp_path, max_distance_meters, target_crs='EPSG:4326'):
+    """
+    [GEOJSON ONLY] Create a GeoDataFrame with pipeline buffer for filtering/intersection checks.
+    Uses UTM projection for accurate distance-based buffering.
+    
+    Parameters
+    ----------
+    pipeline_shp_path : str or Path
+        Path to pipeline shapefile
+    max_distance_meters : float
+        Maximum distance in meters for buffer zone
+    target_crs : str
+        Target CRS for output (default: EPSG:4326)
+    
+    Returns
+    -------
+    pipeline_buffer_gdf : GeoDataFrame
+        GeoDataFrame with pipeline buffer geometry in target CRS
+    metric_crs : str
+        The metric CRS used for buffer calculation (for reference)
+    """
+    # Load pipeline shapefile
+    pipeline_gdf = gpd.read_file(pipeline_shp_path)
+    
+    # Ensure in target CRS
+    if pipeline_gdf.crs != target_crs:
+        pipeline_gdf = pipeline_gdf.to_crs(target_crs)
+    
+    # Get the centroid of the pipeline to determine best UTM zone
+    # This gives more accurate distance measurements than Web Mercator
+    pipeline_centroid = pipeline_gdf.union_all().centroid
+    lon, lat = pipeline_centroid.x, pipeline_centroid.y
+    
+    # Calculate appropriate UTM zone
+    utm_zone = int((lon + 180) / 6) + 1
+    hemisphere = 'north' if lat >= 0 else 'south'
+    
+    # Try to use UTM projection for better accuracy
+    try:
+        if hemisphere == 'north':
+            metric_crs = f'EPSG:326{utm_zone:02d}'  # UTM North
+        else:
+            metric_crs = f'EPSG:327{utm_zone:02d}'  # UTM South
+        
+        # Test if this CRS is valid
+        pipeline_gdf_metric = pipeline_gdf.to_crs(metric_crs)
+        print(f"Pipeline buffer using {metric_crs} (UTM Zone {utm_zone}{hemisphere[0].upper()}) for accurate {max_distance_meters}m buffer")
+    except:
+        # Fallback to Web Mercator if UTM fails
+        metric_crs = 'EPSG:3857'
+        pipeline_gdf_metric = pipeline_gdf.to_crs(metric_crs)
+        print(f"Pipeline buffer using EPSG:3857 (Web Mercator) for {max_distance_meters}m buffer")
+    
+    # Create buffer around pipeline in meters
+    pipeline_buffer_metric = pipeline_gdf_metric.buffer(max_distance_meters).union_all()
+    
+    # Transform buffer back to target CRS
+    pipeline_buffer_gdf = gpd.GeoDataFrame(
+        {'geometry': [pipeline_buffer_metric]},
+        crs=metric_crs
+    ).to_crs(target_crs)
+    
+    return pipeline_buffer_gdf, metric_crs
+
 def filter_predictions_by_pipeline(pred_gdf, pipeline_shp_path, max_distance_meters, target_crs='EPSG:4326'):
     """
     [GEOJSON ONLY] Filter predictions based on distance to pipeline using geographic operations.
+    Uses the same UTM-based buffer creation as create_pipeline_buffer_gdf() for consistency.
     
     Parameters
     ----------
@@ -498,26 +584,16 @@ def filter_predictions_by_pipeline(pred_gdf, pipeline_shp_path, max_distance_met
     rejected_count : int
         Number of predictions rejected
     """
-    # Load pipeline shapefile
-    pipeline_gdf = gpd.read_file(pipeline_shp_path)
+    # Create pipeline buffer using shared function (ensures consistency)
+    pipeline_buffer_gdf, _ = create_pipeline_buffer_gdf(
+        pipeline_shp_path, max_distance_meters, target_crs
+    )
     
-    # Ensure both are in the same CRS
-    if pipeline_gdf.crs != target_crs:
-        pipeline_gdf = pipeline_gdf.to_crs(target_crs)
-    
-    # To calculate distance in meters, we need to work in a metric CRS
-    # Use EPSG:3857 (Web Mercator) for distance calculations
-    metric_crs = 'EPSG:3857'
-    
-    # Transform both to metric CRS
-    pred_gdf_metric = pred_gdf.to_crs(metric_crs)
-    pipeline_gdf_metric = pipeline_gdf.to_crs(metric_crs)
-    
-    # Create buffer around pipeline in meters
-    pipeline_buffer = pipeline_gdf_metric.buffer(max_distance_meters).unary_union
+    # Get the buffer geometry
+    pipeline_buffer_geom = pipeline_buffer_gdf.geometry.iloc[0]
     
     # Check which predictions intersect with the buffer
-    within_buffer = pred_gdf_metric.geometry.intersects(pipeline_buffer)
+    within_buffer = pred_gdf.geometry.intersects(pipeline_buffer_geom)
     
     # Keep only predictions within buffer
     filtered_gdf = pred_gdf[within_buffer].reset_index(drop=True)
@@ -859,7 +935,7 @@ def baseline_comparison_geo(pred_geojson, truth_geojson, image_path, output_dir,
     
     # --- 4. PIPELINE FILTERING (if applicable) ---
     if pipeline_shp_path:
-        # Filter predictions using geographic operations (no pixel conversion needed)
+        # Filter predictions using accurate UTM-based distance filtering
         original_count = len(pred_gdf)
         pred_gdf, rejected_count = filter_predictions_by_pipeline(
             pred_gdf, pipeline_shp_path, max_distance, target_crs=target_crs
@@ -880,9 +956,9 @@ def baseline_comparison_geo(pred_geojson, truth_geojson, image_path, output_dir,
                 pred_confidences = pred_confidences[:len(pred_gdf)] if len(pred_confidences) >= len(pred_gdf) else pred_confidences
     
     # --- 5. CLASSIFICATION OF TRUTH BOXES ---
-    # Determine area threshold based on CRS
-    area_threshold_m2 = 200  # square meters
-    point_indices, box_indices = classify_geo_boxes(geo_truth_boxes, area_threshold=area_threshold_m2, crs=target_crs)
+    # Classify using actual geometry type from GeoDataFrame (Point vs Polygon)
+    # This is more accurate than area-based classification
+    point_indices, box_indices = classify_geo_boxes(geo_truth_boxes, gdf=truth_gdf, crs=target_crs)
     
     # --- 7. MATCHING PROCESS ---
     matched_predictions, matched_truths = set(), set()
