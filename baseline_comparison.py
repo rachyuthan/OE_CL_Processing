@@ -142,6 +142,12 @@ def save_matching_results_geojson(matched_truths, matched_predictions, removed_i
     for pred_idx in new_indices:
         if pred_idx < len(pred_gdf):
             geom = pred_gdf.iloc[pred_idx].geometry
+            
+            # Get confidence score if available
+            confidence = None
+            if 'confidence' in pred_gdf.columns:
+                confidence = float(pred_gdf.iloc[pred_idx]['confidence'])
+            
             feature = {
                 'type': 'Feature',
                 'properties': {
@@ -152,6 +158,11 @@ def save_matching_results_geojson(matched_truths, matched_predictions, removed_i
                 },
                 'geometry': gpd.GeoSeries([geom]).__geo_interface__['features'][0]['geometry']
             }
+            
+            # Add confidence if available
+            if confidence is not None:
+                feature['properties']['confidence'] = confidence
+            
             all_features.append(feature)
             fp_count += 1
     
