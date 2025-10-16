@@ -1,7 +1,7 @@
 """
 File to run inference on multiple images. Gives visualization of predictions along 
 with confidence scores and baseline comparison results."""
-from post_processing_tools import *
+from object_detection import *
 from baseline_comparison import *
 from post_processing import *
 from flagging import *
@@ -55,42 +55,7 @@ def is_georeferenced(image_path):
     except Exception as e:
         print(f"Error checking georeferencing: {e}")
         return False
-
-def single_image_pred(model_type='kfolds',
-    model_version='m',
-    image_id=None,
-    sliding_window=False,
-    conf_threshold=0.4,
-    output_dir=None
-):
-    """
-    Generate predictions for a single image using the specified model type and version.
     
-    Args:
-        model_version (str): Version of the model to use.
-        image_id (str): image id.
-        sliding_window (bool): Whether to use sliding window predictions.
-        conf_threshold (float): Confidence threshold for predictions.
-    
-    Returns:
-        tuple: Prediction and confidence values.
-    """
-    models = load_models(model_type=model_type, model_version=model_version)
-    if not sliding_window:
-        prediction, confidence = generate_predictions(
-            models,
-            image_id,
-            conf_threshold=conf_threshold,
-        )
-    else:
-        prediction, confidence = generate_sw_predictions(
-            image_id,
-            output_dir,
-            models,
-            conf_threshold=conf_threshold,
-        )
-    
-    return prediction, confidence
 def visualize_predictions(image_file, predictions, confidences):
     """
     Visualize predictions on the image and save the output.
@@ -149,7 +114,7 @@ def get_image_list(input_path):
     else:
         print(f"Error: {input_path} is not a valid file or directory")
         return []
-
+    
 def create_building_record(box, transform, image_path, building_type, config):
     """
     Create a dictionary record for a building (new or removed).
@@ -328,7 +293,7 @@ def process_single_image(image_path, config):
         )
         print(f"  Saved: {filtered_geojson}")
         # Step 5: Extract new and removed buildings for CSV export
-        print("\n[5/5] Extracting building records...")
+        print("\nExtracting building records...")
         new_buildings = []
         removed_buildings = []
         
@@ -339,9 +304,7 @@ def process_single_image(image_path, config):
         with open(filtered_geojson, 'r') as f:
             geojson_data = json.load(f)
             total_count = geojson_data.get('properties', {}).get('total_features', len(comparison_gdf))
-            matched_count = geojson_data.get('properties', {}).get('Matched', 0)
-            new_count = geojson_data.get('properties', {}).get('New', 0)
-            removed_count = geojson_data.get('properties', {}).get('Removed', 0)
+            
         
         
         
@@ -352,8 +315,8 @@ def process_single_image(image_path, config):
         # Extract new buildings
         fp_features = comparison_gdf[comparison_gdf['type'] == 'New']
         print(f"  Found {len(fp_features)} new buildings")
-        
-        for idx, row in fp_features.iterrows():
+
+        for _, row in fp_features.iterrows():
             geom = row.geometry
             bounds = geom.bounds  # minx, miny, maxx, maxy in geographic coords
             
@@ -371,7 +334,7 @@ def process_single_image(image_path, config):
         fn_features = comparison_gdf[comparison_gdf['type'] == 'Removed']
         print(f"  Found {len(fn_features)} removed buildings")
         
-        for idx, row in fn_features.iterrows():
+        for _, row in fn_features.iterrows():
             geom = row.geometry
             bounds = geom.bounds
             
