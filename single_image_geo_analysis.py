@@ -114,7 +114,9 @@ def get_image_list(input_path):
     else:
         print(f"Error: {input_path} is not a valid file or directory")
         return []
-    
+
+
+
 def create_building_record(box, transform, image_path, building_type, config):
     """
     Create a dictionary record for a building (new or removed).

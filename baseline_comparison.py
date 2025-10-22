@@ -4,9 +4,15 @@
 '2. Baseline_removed_<image_id>.geojson: False Negatives'
 '3. Baseline_new_<image_id>.geojson: False Positives'
 
-from post_processing_tools import *
 import geopandas as gpd
 import json
+from pathlib import Path
+import numpy as np
+import pyproj
+from shapely.geometry import box as shp_box
+import pandas as pd
+import cv2
+import rasterio
 
 # =============================================================================
 # GEOJSON-SPECIFIC FUNCTIONS
@@ -263,6 +269,50 @@ def load_geojson_boxes(geojson_input):
             geo_boxes.append(list(bounds))
     
     return np.array(geo_boxes), gdf
+
+def filter_overlapping_boxes(pred_boxes, overlap_threshold=0.7):
+    """
+    Filter boxes that are mostly contained within larger boxes
+    
+    Parameters
+    -----------
+    pred_boxes : list of lists
+        List of predicted bounding boxes in the format [x1, y1, x2, y2]
+    overlap_threshold : float
+        Threshold for overlap ratio (0 to 1)
+    
+    Returns
+    --------
+    filtered_indices : set
+        Set of indices of boxes that are filtered out
+    """
+    n = len(pred_boxes)
+    filtered_indices = set()
+    
+    # Sort boxes by area (largest first)
+    areas = [(i, (box[2]-box[0])*(box[3]-box[1])) for i, box in enumerate(pred_boxes)]
+    areas.sort(key=lambda x: x[1], reverse=True)
+    
+    for i, (idx1, area1) in enumerate(areas):
+        if idx1 in filtered_indices:
+            continue
+        box1 = pred_boxes[idx1]
+        
+        for idx2, area2 in areas[i+1:]:
+            if idx2 in filtered_indices:
+                continue
+            box2 = pred_boxes[idx2]
+            
+            # Calculate intersection
+            intersection = calculate_iou_geometry(box1, box2) 
+            smaller_area = min(area1, area2)
+            overlap_ratio = intersection * (area1 + area2) / smaller_area
+            
+            if overlap_ratio >= overlap_threshold:
+                if idx1 not in filtered_indices:
+                    filtered_indices.add(idx1) 
+    
+    return filtered_indices
 
 def filter_geojson_boxes_by_overlap(geo_boxes, gdf, overlap_threshold=0.7):
     """
@@ -848,6 +898,52 @@ def assign_geo_point_matches(point_matches, matched_truths, matched_predictions)
 # END OF GEOJSON-SPECIFIC MATCHING FUNCTIONS
 # =============================================================================
 
+# ============================================================================
+# IMAGE PREPERATION FUNCTIONS
+# ============================================================================
+
+def load_and_prepare_image(image_path):
+    """
+    Loads image and extracts relevant metadata. Assumes input is .tif or .tiff for GeoTIFF.
+    
+    Parameters
+    ----------
+    image_path : str
+        Path to the image file
+    
+    Returns
+    -------
+    image : numpy array
+        Loaded image
+    transform : pyproj.Transformer
+        Transformer for converting pixel coordinates to geographic coordinates
+    is_geotiff : bool
+        Whether the image is a GeoTIFF
+    bounds_geo : tuple
+        Geographic bounds of the image (left, bottom, right, top)
+    """
+    image_path_str = str(image_path)
+    is_geotiff = image_path_str.lower().endswith('.tif') or image_path_str.lower().endswith('.tiff')
+    
+    if is_geotiff:
+        with rasterio.open(image_path) as src:
+            image = src.read().transpose(1, 2, 0)
+            if image.shape[2] >= 3:
+                image = image[:, :, [2, 1, 0]]
+            
+            transform = src.transform
+            bounds_geo = (src.bounds.left, src.bounds.bottom, src.bounds.right, src.bounds.top)
+    else:
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError(f"Failed to load image: {image_path}")
+
+        transform, bounds_geo = None, None
+
+    return image, transform, is_geotiff, bounds_geo
+
+
+
 # =============================================================================
 # GEOJSON-SPECIFIC POST-PROCESSING FUNCTION
 # This is the main GeoJSON-based analysis function (alternative to post_processing_analysis)
@@ -895,14 +991,41 @@ def baseline_comparison_geo(pred_geojson, truth_geojson, image_path, output_dir,
     """
     # --- 1. INITIALIZATION AND IMAGE LOADING ---
     image_path = Path(image_path)
-    image, height, width, transform, crs, is_geotiff, bounds_geo = load_and_prepare_image(image_path)
+    image, transform, is_geotiff, bounds_geo = load_and_prepare_image(image_path)
     annotated_image = image.copy() if save_images else None
     
     # --- 2. LOAD GEOJSON BOXES IN GEOGRAPHIC COORDINATES ---
     geo_pred_boxes, pred_gdf = load_geojson_boxes(pred_geojson)
     
-    # Load truth GeoDataFrame
-    _, truth_gdf = load_geojson_boxes(truth_geojson)
+    # Load truth GeoDataFrame (don't extract boxes yet - will do after filtering)
+    if isinstance(truth_geojson, list):
+        # Handle list of file paths (e.g., multiple shapefiles)
+        gdfs = []
+        for path in truth_geojson:
+            gdf_part = gpd.read_file(path)
+            gdfs.append(gdf_part)
+        # Merge all GeoDataFrames
+        truth_gdf = gpd.GeoDataFrame(pd.concat(gdfs, ignore_index=True))
+        # Set CRS from first file if not set
+        if truth_gdf.crs is None and len(gdfs) > 0:
+            truth_gdf.crs = gdfs[0].crs
+        print(f"Loaded and merged {len(truth_geojson)} files: {sum(len(g) for g in gdfs)} total features")
+    elif isinstance(truth_geojson, (str, Path)):
+        truth_gdf = gpd.read_file(truth_geojson)
+    elif isinstance(truth_geojson, dict):
+        truth_gdf = gpd.GeoDataFrame.from_features(truth_geojson['features'])
+        if 'crs' in truth_geojson:
+            truth_gdf.crs = truth_geojson['crs'].get('properties', {}).get('name', 'EPSG:4326')
+        else:
+            truth_gdf.crs = 'EPSG:4326'
+    elif isinstance(truth_geojson, gpd.GeoDataFrame):
+        truth_gdf = truth_geojson.copy()
+    else:
+        raise ValueError(f"Unsupported truth_geojson type: {type(truth_geojson)}")
+    
+    # Ensure CRS is set (default to EPSG:4326 if not specified)
+    if truth_gdf.crs is None:
+        truth_gdf.crs = 'EPSG:4326'
     
     # IMPORTANT: All data is standardized to EPSG:4326 (WGS84 lat/lon)
     # This is the standard geographic coordinate system for GeoJSON
@@ -914,7 +1037,8 @@ def baseline_comparison_geo(pred_geojson, truth_geojson, image_path, output_dir,
     if pred_gdf.crs != target_crs:
         print(f"Converting predictions from {pred_gdf.crs} to {target_crs}")
         pred_gdf = pred_gdf.to_crs(target_crs)
-        geo_pred_boxes, pred_gdf = load_geojson_boxes(pred_gdf)
+        # Re-extract bounding boxes after CRS transformation
+        geo_pred_boxes = np.array([list(geom.bounds) for geom in pred_gdf.geometry if geom is not None and not geom.is_empty])
     
     # Filter overlapping predictions
     geo_pred_boxes, pred_gdf = filter_geojson_boxes_by_overlap(geo_pred_boxes, pred_gdf, overlap_threshold=0.7)
@@ -936,15 +1060,11 @@ def baseline_comparison_geo(pred_geojson, truth_geojson, image_path, output_dir,
         
         print(f"Filtered truth data: {len(truth_gdf)} geometries within image bounds")
     
-    # Now extract bounding boxes from the (filtered) truth GeoDataFrame
-    geo_truth_boxes, truth_gdf = load_geojson_boxes(truth_gdf)
+    # Extract bounding boxes from the filtered truth GeoDataFrame
     
-    # --- 3. CALCULATE INVERSE TRANSFORM ---
-    inverse_transform = None
-    if is_geotiff and transform is not None:
-        inverse_transform = ~transform
+    geo_truth_boxes = np.array([list(geom.bounds) for geom in truth_gdf.geometry if geom is not None and not geom.is_empty])
     
-    # --- 4. PIPELINE FILTERING (if applicable) ---
+    # --- 3. PIPELINE FILTERING (if applicable) ---
     if pipeline_shp_path:
         # Filter predictions using accurate UTM-based distance filtering
         original_count = len(pred_gdf)
@@ -952,8 +1072,8 @@ def baseline_comparison_geo(pred_geojson, truth_geojson, image_path, output_dir,
             pred_gdf, pipeline_shp_path, max_distance, target_crs=target_crs
         )
         
-        # Update geo_pred_boxes and confidences to match filtered GeoDataFrame
-        geo_pred_boxes, pred_gdf = load_geojson_boxes(pred_gdf)
+        # Re-extract bounding boxes from filtered predictions
+        geo_pred_boxes = np.array([list(geom.bounds) for geom in pred_gdf.geometry if geom is not None and not geom.is_empty])
         
         # Update confidences if provided
         if pred_confidences is not None and rejected_count > 0:
@@ -966,15 +1086,15 @@ def baseline_comparison_geo(pred_geojson, truth_geojson, image_path, output_dir,
                 # Safest is to keep the first N confidences where N = len(pred_gdf)
                 pred_confidences = pred_confidences[:len(pred_gdf)] if len(pred_confidences) >= len(pred_gdf) else pred_confidences
     
-    # --- 5. CLASSIFICATION OF TRUTH BOXES ---
+    # --- 4. CLASSIFICATION OF TRUTH BOXES ---
     # Classify using actual geometry type from GeoDataFrame (Point vs Polygon)
     # This is more accurate than area-based classification
     point_indices, box_indices = classify_geo_boxes(geo_truth_boxes, gdf=truth_gdf, crs=target_crs)
-    
-    # --- 7. MATCHING PROCESS ---
+
+    # --- 5. MATCHING PROCESS ---
     matched_predictions, matched_truths = set(), set()
     
-    # Phase 1: Find and process box-point pairs
+    # Phase 1: Find box-point pairs
     box_point_pairs, point_indices, standalone_box_indices = find_geo_box_point_pairs(
         geo_truth_boxes, point_indices, box_indices, distance_threshold=point_distance_tolerance, gdf=truth_gdf
     )
@@ -1005,18 +1125,18 @@ def baseline_comparison_geo(pred_geojson, truth_geojson, image_path, output_dir,
         point_matches, matched_truths, matched_predictions
     )
     
-    # --- 8. IDENTIFY MISSED DETECTIONS ---
+    # --- 6. IDENTIFY MISSED DETECTIONS ---
     missed_points = [i for i in point_indices if i not in matched_truths]
     missed_boxes = [i for i in box_indices if i not in matched_truths]
     
-    # --- 9. COLLECT FALSE POSITIVES (ALL UNMATCHED PREDICTIONS) ---
+    # --- 7. COLLECT FALSE POSITIVES (ALL UNMATCHED PREDICTIONS) ---
     # No filtering by confidence - include all unmatched predictions
     false_positive_indices = [i for i in range(len(geo_pred_boxes)) if i not in matched_predictions]
     
     # Collect missed indices (false negatives)
     missed_indices = missed_points + missed_boxes
     
-    # --- 10. SAVE COMBINED GEOJSON RESULTS ---
+    # --- 8. SAVE COMBINED GEOJSON RESULTS ---
     # Save single combined GeoJSON file with all features color-coded
     combined_geojson_path = save_matching_results_geojson(
         matched_truths=matched_truths,
@@ -1028,8 +1148,8 @@ def baseline_comparison_geo(pred_geojson, truth_geojson, image_path, output_dir,
         output_dir=output_dir,
         image_stem=image_path.stem
     )
-    
-    # --- 11. SAVE IMAGE VISUALIZATION (OPTIONAL) ---
+
+    # --- 9. SAVE IMAGE VISUALIZATION (OPTIONAL) ---
     if save_images and annotated_image is not None:
         output_path = str(Path(output_dir) / f"{image_path.stem}_analysis.jpg")
         cv2.imwrite(output_path, annotated_image)

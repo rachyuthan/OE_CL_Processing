@@ -3,6 +3,11 @@ import cv2
 from ultralytics import YOLO
 import numpy as np
 from tqdm import tqdm
+import pyproj
+from shapely.geometry import box as shp_box
+from shapely.ops import transform as shapely_transform
+import rasterio
+import json
 # =============================================================
 # Functions for loading models
 # =============================================================
@@ -606,5 +611,109 @@ def single_image_pred(model_type='kfolds',
     
     return prediction, confidence
 
+def predictions_to_geojson(image_file, predictions, confidences, output_path=None):
+    """
+    Convert predictions to GeoJSON in CRS EPSG:4326.
+    
+    Args:
+        image_file (str or Path): Path to the georeferenced image file (GeoTIFF).
+        predictions (dict): Dictionary with image paths as keys and prediction boxes as values.
+        output_path (str or Path, optional): Path to save the GeoJSON file. If None, returns GeoJSON dict.
+    
+    Returns:
+        geo_json (dict or None): GeoJSON dictionary if output_path is None, otherwise None (saves to file).
+    
+    Raises:
+        ValueError: If image is not a GeoTIFF or doesn't have geospatial information.
+    """
+    image_file = Path(image_file)
+    
+    # Check if image is a GeoTIFF
+    if not str(image_file).lower().endswith(('.tif', '.tiff')):
+        raise ValueError(f"Image must be a GeoTIFF (.tif or .tiff): {image_file}")
+    
+    # Get predictions for this image
+    image_key = str(image_file)
+    if image_key not in predictions:
+        raise ValueError(f"No predictions found for image: {image_file}")
+    
+    pred_boxes = predictions[image_key]
+    conf = confidences[image_key] if image_key in confidences else None
+    
+    # Get geotransform and CRS from GeoTIFF
+    try:
+        with rasterio.open(image_file) as src:
+            transform = src.transform
+            crs = src.crs
+    except Exception as e:
+        raise ValueError(f"Failed to read geospatial information from image: {e}")
+    
+    if crs is None:
+        raise ValueError(f"Image does not have a valid CRS: {image_file}")
+    
+    # Create transformer to EPSG:4326 if needed
+    target_crs = pyproj.CRS.from_epsg(4326)
+    need_transform = crs != target_crs
+    
+    if need_transform:
+        transformer = pyproj.Transformer.from_crs(
+            crs, target_crs, always_xy=True
+        )
+    
+    # Convert bounding boxes to geographic coordinates
+    features = []
+    
+    for i, box in enumerate(pred_boxes):
+        x1, y1, x2, y2 = map(float, box)
+        
+        # Transform pixel coordinates to geographic coordinates
+        ul_x, ul_y = transform * (x1, y1)  # Upper left
+        lr_x, lr_y = transform * (x2, y2)  # Lower right
+        
+        # Create box geometry in original CRS
+        building_box = shp_box(ul_x, lr_y, lr_x, ul_y)  # (minx, miny, maxx, maxy)
+        
+        # Transform to EPSG:4326 if needed
+        if need_transform:
+            building_box = shapely_transform(transformer.transform, building_box)
+        
+        # Create GeoJSON feature
+        feature = {
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [list(building_box.exterior.coords)]
+            },
+            "properties": {
+                "id": i,
+                "source_image": str(image_file.name),
+                "confidence": float(conf[i]) if conf is not None else None
+                # "bbox_pixel": [x1, y1, x2, y2]
+            }
+        }
+        features.append(feature)
+    
+    # Create GeoJSON FeatureCollection
+    geojson = {
+        "type": "FeatureCollection",
+        "crs": {
+            "type": "name",
+            "properties": {
+                "name": "EPSG:4326"
+            }
+        },
+        "features": features
+    }
+    
+    # Save or return
+    if output_path is not None:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, 'w') as f:
+            json.dump(geojson, f, indent=2)
+        print(f"GeoJSON saved to: {output_path}")
+        return None
+    else:
+        return geojson
 
 
