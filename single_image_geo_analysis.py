@@ -25,7 +25,12 @@ CONFIG = {
    "project_id": "85",
    "model_version": "YOLOv11m",
    "cycle_start": "2025-02-01 00:00:00",
-   "cycle_end": "2025-04-01 00:00:00"
+   "cycle_end": "2025-04-01 00:00:00",
+   # Pipeline filtering parameters
+   "max_distance": 250,  # Valid zone: predictions within this distance (meters)
+   "buffer": 50,  # Buffer zone: predictions in max_distance to max_distance+buffer get chance to match
+   # Confidence filtering
+   "confidence_threshold": 0.6,  # Minimum confidence for "New" predictions (below this -> "Filtered: Confidence")
 }
 
 
@@ -273,7 +278,7 @@ def process_single_image(image_path, config):
         )
         print(f"  Saved: {geojson_output_path}")
         
-        # Step 4: Run baseline comparison
+        # Step 4: Run baseline comparison (with distance-based filtering)
         print("\nRunning baseline comparison...")
         combined_geojson = baseline_comparison_geo(
             pred_geojson=geojson_output_path,
@@ -281,20 +286,22 @@ def process_single_image(image_path, config):
             image_path=image_path,
             output_dir=config['output_dir'],
             pipeline_shp_path=config['pipeline_path'],
-            max_distance=250,
+            max_distance=config['max_distance'],
+            buffer=config['buffer'],
             point_distance_tolerance=10,
             save_images=False
         )
-
-        # Step 5: Filter new buildings by confidence
-
-        print("\nFiltering new buildings by confidence...")
-        filtered_geojson, _ = filter_false_positives_by_confidence(
+        
+        # Step 5: Apply confidence-based filtering (separate post-processing step)
+        print("\nApplying confidence-based filtering...")
+        from post_processing import filter_false_positives_by_confidence
+        filtered_geojson, filter_stats = filter_false_positives_by_confidence(
             geojson_path=combined_geojson,
-            fp_confidence_threshold=0.6,
+            fp_confidence_threshold=config['confidence_threshold'],
+            output_path=None  # Overwrites the combined_geojson
         )
-        print(f"  Saved: {filtered_geojson}")
-        # Step 5: Extract new and removed buildings for CSV export
+        
+        # Step 6: Extract new and removed buildings for CSV export
         print("\nExtracting building records...")
         new_buildings = []
         removed_buildings = []
@@ -314,9 +321,9 @@ def process_single_image(image_path, config):
         with rasterio.open(image_path) as src:
             transform = src.transform
             
-        # Extract new buildings
+        # Extract new buildings (only high-confidence ones that passed filtering)
         fp_features = comparison_gdf[comparison_gdf['type'] == 'New']
-        print(f"  Found {len(fp_features)} new buildings")
+        print(f"  Found {len(fp_features)} new buildings (high confidence)")
 
         for _, row in fp_features.iterrows():
             geom = row.geometry

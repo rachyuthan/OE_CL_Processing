@@ -69,14 +69,22 @@ def calculate_iou_geometry(geom1, geom2):
         # Fallback to 0 if calculation fails
         return 0.0
 
-def save_matching_results_geojson(matched_truths, matched_predictions, removed_indices, 
+def save_matching_results_geojson(matched_truths, matched_predictions, removed_indices,
                                    new_indices, truth_gdf, pred_gdf, 
-                                   output_dir, image_stem):
+                                   output_dir, image_stem, filtered_distance_indices=None,
+                                   filtered_confidence_indices=None):
     """
-    [GEOJSON ONLY] Save a combined GeoJSON file with all features color-coded:
+    [GEOJSON ONLY] Save a combined GeoJSON file with all features color-coded.
+    
+    All predictions are categorized as follows:
     - Green: Matched (correctly detected buildings)
     - Red: Removed (missed detections)
-    - Yellow: New (incorrect detections)
+    - Yellow: New (unfiltered false positives)
+    - Orange: New (filtered='Distance') - predictions in buffer zone that didn't match
+    - Purple: New (filtered='Confidence') - predictions with low confidence
+    
+    Note: Filtered predictions maintain type='New' but have a 'filtered' field
+    indicating the reason (Distance or Confidence).
 
     Parameters
     ----------
@@ -96,6 +104,12 @@ def save_matching_results_geojson(matched_truths, matched_predictions, removed_i
         Directory to save output files
     image_stem : str
         Image filename stem for naming output files
+    filtered_distance_indices : list, optional
+        List of prediction indices filtered due to being in buffer zone (not matched)
+        These will have type='New' and filtered='Distance'
+    filtered_confidence_indices : list, optional
+        List of prediction indices filtered due to low confidence
+        These will have type='New' and filtered='Confidence'
     
     Returns
     -------
@@ -109,38 +123,87 @@ def save_matching_results_geojson(matched_truths, matched_predictions, removed_i
     tp_count = 0
     fn_count = 0
     fp_count = 0
+    filtered_distance_count = 0
+    filtered_confidence_count = 0
+    
+    # Track building IDs to prevent duplicates (when box+point represent same building)
+    seen_matched_ids = set()
+    seen_removed_ids = set()
+    
+    # Check if truth data has ID column
+    id_column = None
+    if truth_gdf is not None and 'id' in truth_gdf.columns:
+        id_column = 'id'
 
     # --- 1. Matched Buildings - GREEN ---
     for truth_idx in matched_truths:
         if truth_idx < len(truth_gdf):
-            geom = truth_gdf.iloc[truth_idx].geometry
+            row = truth_gdf.iloc[truth_idx]
+            geom = row.geometry
+            
+            # Get building ID if available
+            building_id = None
+            if id_column and id_column in row.index:
+                raw_id = row[id_column]
+                # Check if ID is valid (not None, NaN, or empty)
+                if raw_id is not None and str(raw_id).strip() and str(raw_id).lower() != 'nan':
+                    building_id = raw_id
+                    
+                    # Skip if we've already added this building ID (prevents double-counting)
+                    if building_id in seen_matched_ids:
+                        continue
+                    seen_matched_ids.add(building_id)
+            
             feature = {
                 'type': 'Feature',
                 'properties': {
                     'type': 'Matched',
-                    'color': 'green',
                     'truth_index': int(truth_idx),
                     'description': 'Correctly detected building'
                 },
                 'geometry': gpd.GeoSeries([geom]).__geo_interface__['features'][0]['geometry']
             }
+            
+            # Add building ID to properties if available
+            if building_id is not None:
+                feature['properties']['building_id'] = str(building_id)
+            
             all_features.append(feature)
             tp_count += 1
 
     # --- 2. Removed Buildings - RED ---
     for truth_idx in removed_indices:
         if truth_idx < len(truth_gdf):
-            geom = truth_gdf.iloc[truth_idx].geometry
+            row = truth_gdf.iloc[truth_idx]
+            geom = row.geometry
+            
+            # Get building ID if available
+            building_id = None
+            if id_column and id_column in row.index:
+                raw_id = row[id_column]
+                # Check if ID is valid (not None, NaN, or empty)
+                if raw_id is not None and str(raw_id).strip() and str(raw_id).lower() != 'nan':
+                    building_id = raw_id
+                    
+                    # Skip if we've already added this building ID (prevents double-counting)
+                    if building_id in seen_removed_ids:
+                        continue
+                    seen_removed_ids.add(building_id)
+            
             feature = {
                 'type': 'Feature',
                 'properties': {
                     'type': 'Removed',
-                    'color': 'red',
                     'truth_index': int(truth_idx),
                     'description': 'Removed building (not detected by model)'
                 },
                 'geometry': gpd.GeoSeries([geom]).__geo_interface__['features'][0]['geometry']
             }
+            
+            # Add building ID to properties if available
+            if building_id is not None:
+                feature['properties']['building_id'] = str(building_id)
+            
             all_features.append(feature)
             fn_count += 1
 
@@ -158,7 +221,6 @@ def save_matching_results_geojson(matched_truths, matched_predictions, removed_i
                 'type': 'Feature',
                 'properties': {
                     'type': 'New',
-                    'color': 'yellow',
                     'prediction_index': int(pred_idx),
                     'description': 'New building (no matching ground truth)'
                 },
@@ -172,7 +234,65 @@ def save_matching_results_geojson(matched_truths, matched_predictions, removed_i
             all_features.append(feature)
             fp_count += 1
     
-    # --- 4. CREATE COMBINED GEOJSON ---
+    # --- 4. Filtered Distance (predictions in buffer zone that didn't match) - ORANGE ---
+    if filtered_distance_indices:
+        for pred_idx in filtered_distance_indices:
+            if pred_idx < len(pred_gdf):
+                geom = pred_gdf.iloc[pred_idx].geometry
+                
+                # Get confidence score if available
+                confidence = None
+                if 'confidence' in pred_gdf.columns:
+                    confidence = float(pred_gdf.iloc[pred_idx]['confidence'])
+                
+                feature = {
+                    'type': 'Feature',
+                    'properties': {
+                        'type': 'New',
+                        'filtered': 'Distance',
+                        'prediction_index': int(pred_idx),
+                        'description': 'New building filtered: in buffer zone (outside valid distance, not matched)'
+                    },
+                    'geometry': gpd.GeoSeries([geom]).__geo_interface__['features'][0]['geometry']
+                }
+                
+                # Add confidence if available
+                if confidence is not None:
+                    feature['properties']['confidence'] = confidence
+                
+                all_features.append(feature)
+                filtered_distance_count += 1
+    
+    # --- 5. Filtered Confidence (predictions with low confidence) - PURPLE ---
+    if filtered_confidence_indices:
+        for pred_idx in filtered_confidence_indices:
+            if pred_idx < len(pred_gdf):
+                geom = pred_gdf.iloc[pred_idx].geometry
+                
+                # Get confidence score if available
+                confidence = None
+                if 'confidence' in pred_gdf.columns:
+                    confidence = float(pred_gdf.iloc[pred_idx]['confidence'])
+                
+                feature = {
+                    'type': 'Feature',
+                    'properties': {
+                        'type': 'New',
+                        'filtered': 'Confidence',
+                        'prediction_index': int(pred_idx),
+                        'description': 'New building filtered: low confidence'
+                    },
+                    'geometry': gpd.GeoSeries([geom]).__geo_interface__['features'][0]['geometry']
+                }
+                
+                # Add confidence if available
+                if confidence is not None:
+                    feature['properties']['confidence'] = confidence
+                
+                all_features.append(feature)
+                filtered_confidence_count += 1
+    
+    # --- 6. CREATE COMBINED GEOJSON ---
     combined_geojson = {
         'type': 'FeatureCollection',
         'crs': {'type': 'name', 'properties': {'name': 'EPSG:4326'}},
@@ -180,12 +300,14 @@ def save_matching_results_geojson(matched_truths, matched_predictions, removed_i
             'Matched': tp_count,
             'Removed': fn_count,
             'New': fp_count,
+            'Filtered_Distance': filtered_distance_count,
+            'Filtered_Confidence': filtered_confidence_count,
             'total_features': len(all_features)
         },
         'features': all_features
     }
     
-    # --- 5. SAVE COMBINED FILE ---
+    # --- 7. SAVE COMBINED FILE ---
     combined_path = str(output_dir / f"{image_stem}_baseline_comparison.geojson")
     with open(combined_path, 'w') as f:
         json.dump(combined_geojson, f, indent=2)
@@ -195,6 +317,10 @@ def save_matching_results_geojson(matched_truths, matched_predictions, removed_i
     print(f"  Matched (green): {tp_count} features")
     print(f"  Removed (red): {fn_count} features")
     print(f"  New (yellow): {fp_count} features")
+    if filtered_distance_count > 0:
+        print(f"  Filtered Distance (orange): {filtered_distance_count} features")
+    if filtered_confidence_count > 0:
+        print(f"  Filtered Confidence (purple): {filtered_confidence_count} features")
     print(f"  Total: {len(all_features)} features")
     
     return combined_path
@@ -622,10 +748,16 @@ def create_pipeline_buffer_gdf(pipeline_shp_path, max_distance_meters, target_cr
     
     return pipeline_buffer_gdf, metric_crs
 
-def filter_predictions_by_pipeline(pred_gdf, pipeline_shp_path, max_distance_meters, target_crs='EPSG:4326'):
+def filter_predictions_by_pipeline(pred_gdf, pipeline_shp_path, max_distance_meters, buffer, target_crs='EPSG:4326'):
     """
     [GEOJSON ONLY] Filter predictions based on distance to pipeline using geographic operations.
-    Uses the same UTM-based buffer creation as create_pipeline_buffer_gdf() for consistency.
+    Uses a two-tier system:
+    - Within max_distance: Keep for matching (valid predictions)
+    - Within max_distance + buffer: Keep for matching, but mark as "in buffer zone"
+    - Beyond max_distance + buffer: Reject immediately
+    
+    Predictions in the buffer zone will be re-evaluated later - if they end up as "New" (unmatched),
+    they'll be moved to a "Filtered: Distance" category instead.
     
     Parameters
     ----------
@@ -634,33 +766,51 @@ def filter_predictions_by_pipeline(pred_gdf, pipeline_shp_path, max_distance_met
     pipeline_shp_path : str or Path
         Path to pipeline shapefile
     max_distance_meters : float
-        Maximum distance in meters for buffer zone
+        Maximum distance in meters for valid predictions
+    buffer : float
+        Additional buffer distance in meters (grace period)
     target_crs : str
         Target CRS (default: EPSG:4326)
     
     Returns
     -------
     filtered_gdf : GeoDataFrame
-        Filtered GeoDataFrame with only predictions within buffer distance
+        Filtered GeoDataFrame with predictions within max_distance + buffer
+        Includes 'in_buffer_zone' column marking predictions in the buffer zone
     rejected_count : int
-        Number of predictions rejected
+        Number of predictions rejected (beyond max_distance + buffer)
     """
-    # Create pipeline buffer using shared function (ensures consistency)
-    pipeline_buffer_gdf, _ = create_pipeline_buffer_gdf(
+    # Create two buffers: one for valid zone, one for grace zone
+    valid_buffer_gdf, metric_crs = create_pipeline_buffer_gdf(
         pipeline_shp_path, max_distance_meters, target_crs
     )
+    grace_buffer_gdf, _ = create_pipeline_buffer_gdf(
+        pipeline_shp_path, max_distance_meters + buffer, target_crs
+    )
     
-    # Get the buffer geometry
-    pipeline_buffer_geom = pipeline_buffer_gdf.geometry.iloc[0]
+    valid_buffer_geom = valid_buffer_gdf.geometry.iloc[0]
+    grace_buffer_geom = grace_buffer_gdf.geometry.iloc[0]
     
-    # Check which predictions intersect with the buffer
-    within_buffer = pred_gdf.geometry.intersects(pipeline_buffer_geom)
+    # Check which predictions are within each buffer
+    within_valid_zone = pred_gdf.geometry.intersects(valid_buffer_geom)
+    within_grace_zone = pred_gdf.geometry.intersects(grace_buffer_geom)
     
-    # Keep only predictions within buffer
-    filtered_gdf = pred_gdf[within_buffer].reset_index(drop=True)
+    # Keep predictions within grace zone (includes both valid + buffer zones)
+    filtered_gdf = pred_gdf[within_grace_zone].copy()
+    
+    # Mark predictions that are ONLY in buffer zone (not in valid zone)
+    # These will be re-evaluated later
+    in_buffer_only = within_grace_zone & ~within_valid_zone
+    filtered_gdf['in_buffer_zone'] = in_buffer_only[within_grace_zone].values
+    
     rejected_count = len(pred_gdf) - len(filtered_gdf)
+    buffer_count = filtered_gdf['in_buffer_zone'].sum()
     
-    print(f"Pipeline filtering: Kept {len(filtered_gdf)} of {len(pred_gdf)} predictions (rejected {rejected_count})")
+    print(f"Pipeline filtering:")
+    print(f"  Valid zone (≤{max_distance_meters}m): {(~filtered_gdf['in_buffer_zone']).sum()} predictions")
+    print(f"  Buffer zone ({max_distance_meters}m-{max_distance_meters + buffer}m): {buffer_count} predictions")
+    print(f"  Rejected (>{max_distance_meters + buffer}m): {rejected_count} predictions")
+    print(f"  Total kept: {len(filtered_gdf)} predictions")
     
     return filtered_gdf, rejected_count
 
@@ -728,12 +878,13 @@ def match_geo_box_point_pairs(box_point_pairs, geo_truth_boxes, geo_pred_boxes,
         
         # If box is matched (using relaxed threshold), consider it a full match
         if max_iou >= 0.1:  # Lower threshold but counted as full match
+            # ONLY add the box index (not paired points) to prevent double-counting
             matched_truths.add(b_idx)
             matched_predictions.add(best_match)
             
-            # Mark all associated points as matched too
+            # Track processed pairs but DON'T add them to matched_truths
+            # (they represent the same building, so shouldn't be counted separately)
             for p_idx in p_indices:
-                matched_truths.add(p_idx)
                 processed_pairs.add(p_idx)
     
     return processed_pairs
@@ -952,7 +1103,8 @@ def load_and_prepare_image(image_path):
 def baseline_comparison_geo(pred_geojson, truth_geojson, image_path, output_dir, 
                                       pipeline_shp_path=None,
                                       max_distance=100,
-                                      point_distance_tolerance=10, 
+                                      buffer=50,
+                                      point_distance_tolerance=10,
                                       pred_confidences=None, 
                                       save_images=False):
     """
@@ -973,7 +1125,11 @@ def baseline_comparison_geo(pred_geojson, truth_geojson, image_path, output_dir,
     pipeline_shp_path : str, optional
         Path to pipeline shapefile for filtering predictions
     max_distance : float
-        Maximum distance in meters for pipeline buffer (default: 100)
+        Maximum distance in meters for valid predictions from pipeline (default: 100)
+    buffer : float
+        Additional buffer distance in meters for grace zone (default: 50)
+        Predictions in buffer zone (max_distance to max_distance+buffer) are kept for matching,
+        but if they remain unmatched, they're marked as "Filtered: Distance" instead of "New"
     point_distance_tolerance : float
         Distance tolerance for point matching in meters
     pred_confidences : list, optional
@@ -984,10 +1140,14 @@ def baseline_comparison_geo(pred_geojson, truth_geojson, image_path, output_dir,
     Returns
     -------
     combined_geojson_path : str
-        Path to combined GeoJSON file containing all features:
-        - Green (true_positive): Correctly detected buildings
-        - Red (false_negative): Missed buildings
-        - Yellow (false_positive): False detections
+        Path to combined GeoJSON file containing all features with properties:
+        - type='Matched', color=green: Correctly detected buildings
+        - type='Removed', color=red: Missed buildings
+        - type='New', color=yellow: Unfiltered false detections (high confidence, valid zone)
+        - type='New', filtered='Distance', color=orange: Unmatched predictions in buffer zone
+        
+        Note: Confidence filtering is handled separately by post_processing.py
+        which adds filtered='Confidence' field to low-confidence predictions (purple color)
     """
     # --- 1. INITIALIZATION AND IMAGE LOADING ---
     image_path = Path(image_path)
@@ -1066,10 +1226,10 @@ def baseline_comparison_geo(pred_geojson, truth_geojson, image_path, output_dir,
     
     # --- 3. PIPELINE FILTERING (if applicable) ---
     if pipeline_shp_path:
-        # Filter predictions using accurate UTM-based distance filtering
+        # Filter predictions using accurate UTM-based distance filtering with buffer zone
         original_count = len(pred_gdf)
         pred_gdf, rejected_count = filter_predictions_by_pipeline(
-            pred_gdf, pipeline_shp_path, max_distance, target_crs=target_crs
+            pred_gdf, pipeline_shp_path, max_distance, buffer, target_crs=target_crs
         )
         
         # Re-extract bounding boxes from filtered predictions
@@ -1129,15 +1289,35 @@ def baseline_comparison_geo(pred_geojson, truth_geojson, image_path, output_dir,
     missed_points = [i for i in point_indices if i not in matched_truths]
     missed_boxes = [i for i in box_indices if i not in matched_truths]
     
-    # --- 7. COLLECT FALSE POSITIVES (ALL UNMATCHED PREDICTIONS) ---
-    # No filtering by confidence - include all unmatched predictions
-    false_positive_indices = [i for i in range(len(geo_pred_boxes)) if i not in matched_predictions]
+    # --- 7. COLLECT FALSE POSITIVES AND FILTER BY BUFFER ZONE ---
+    # Separate unmatched predictions into categories:
+    # - "New" (false positives in valid zone)
+    # - "Filtered: Distance" (unmatched predictions in buffer zone)
+    
+    all_unmatched = [i for i in range(len(geo_pred_boxes)) if i not in matched_predictions]
+    
+    false_positive_indices = []
+    filtered_distance_indices = []
+    
+    # Filter by distance (buffer zone)
+    if pipeline_shp_path and 'in_buffer_zone' in pred_gdf.columns:
+        for idx in all_unmatched:
+            if pred_gdf.iloc[idx]['in_buffer_zone']:
+                # Prediction is in buffer zone and didn't match -> filter by distance
+                filtered_distance_indices.append(idx)
+            else:
+                # Prediction is in valid zone -> mark as "New"
+                false_positive_indices.append(idx)
+    else:
+        # No buffer zone filtering - all unmatched are "New"
+        false_positive_indices = all_unmatched
     
     # Collect missed indices (false negatives)
     missed_indices = missed_points + missed_boxes
     
     # --- 8. SAVE COMBINED GEOJSON RESULTS ---
     # Save single combined GeoJSON file with all features color-coded
+    # Note: Confidence filtering is done separately in post_processing.py
     combined_geojson_path = save_matching_results_geojson(
         matched_truths=matched_truths,
         matched_predictions=matched_predictions,
@@ -1146,7 +1326,9 @@ def baseline_comparison_geo(pred_geojson, truth_geojson, image_path, output_dir,
         truth_gdf=truth_gdf,
         pred_gdf=pred_gdf,
         output_dir=output_dir,
-        image_stem=image_path.stem
+        image_stem=image_path.stem,
+        filtered_distance_indices=filtered_distance_indices,
+        filtered_confidence_indices=[]  # Empty - confidence filtering done in post_processing.py
     )
 
     # --- 9. SAVE IMAGE VISUALIZATION (OPTIONAL) ---
