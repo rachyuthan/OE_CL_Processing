@@ -16,7 +16,7 @@ def flagging(new_buildings, removed_buildings, total_buildings, criteria=0.3):
     removed_count = len(removed_buildings)
     
     if total_buildings > 0:
-        ratio = new_count + removed_count / total_buildings
+        ratio = (new_count + removed_count) / total_buildings
     else:
         ratio = 0
 
