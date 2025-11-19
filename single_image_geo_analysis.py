@@ -10,9 +10,11 @@ import cv2
 import pandas as pd
 from datetime import datetime
 import shutil
+import time
+from shapely.geometry import Point, Polygon, MultiPolygon
 
 CONFIG = {
-   "output_dir": "./single_image/",
+   "output_dir": "./Maxar_test/",
    "pipeline_path": "/cephfs/work/rithvik/OE_CL_shps/FullSystem/EGTS_Full_System.shp",
    # For multiple truth files (e.g., points and polygons), provide a list
    "baseline": [
@@ -20,8 +22,9 @@ CONFIG = {
        "/cephfs/work/rithvik/OE_CL_shps/EGTS Buildings/EGTS Buildings/Building Location.shp",  # location path
    ],
    # Input: either a single image path or a directory containing images
+   "input_image_text": "/cephfs/work/rithvik/datasets/datasets/BHE/Maxar_images_cropped/autosplit_test.txt",
    "input_images": "/cephfs/work/rithvik/datasets/datasets/BHE/geo_imgs_test/",  # Directory or single file path
-   "single_image": "/cephfs/work/rithvik/datasets/datasets/BHE/geo_imgs_test/Maxar-50cm_SKYWATCH_25SEP08162820-S3DS_R1C1-200009812612_01_P001_0_BYIuWJ67y9.tif",
+   "single_image": "/cephfs/work/rithvik/datasets/datasets/BHE/Maxar_GBA_subset/images/Maxar-50cm_SKYWATCH_25SEP08162820-S3DS_R1C3-200009812612_01_P001_2_BRgxfIJ9vh.tif",
    # Project metadata for CSV export
    "project_id": "85",
    "model_version": "YOLOv11m",
@@ -33,7 +36,7 @@ CONFIG = {
    # Confidence filtering
    "confidence_threshold": 0.6,  # Minimum confidence for "New" predictions (below this -> "Filtered: Confidence")
    # Rotation-based test-time augmentation
-   "use_rotation_tta": True,  # Whether to use 4-way rotation augmentation (0°, 90°, 180°, 270°)
+   "use_rotation_tta": False,  # Whether to use 4-way rotation augmentation (0°, 90°, 180°, 270°)
 }
 
 
@@ -191,17 +194,14 @@ def create_building_record(geometry, image_path, building_type, config):
     Returns:
         dict: Building record dictionary
     """
-    from shapely.geometry import Point, Polygon, MultiPolygon
+    
     
     # Convert geometry to WKT format
     if isinstance(geometry, Point):
         # Point: POINT(x y)
-        wkt_geometry = f'POINT({geometry.x} {geometry.y})'
+        wkt_geometry = f'\"POINT({geometry.x} {geometry.y})\"'
     elif isinstance(geometry, (Polygon, MultiPolygon)):
         # Use shapely's built-in WKT export which properly closes polygons
-        wkt_geometry = geometry.wkt
-    else:
-        # Fallback for other geometry types
         wkt_geometry = geometry.wkt
     
     # Mapping of numerical IDs to filenames
@@ -235,7 +235,7 @@ def create_building_record(geometry, image_path, building_type, config):
         'model_version': 'YOLOv11',
         'cycle_start': config.get('cycle_start', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
         'cycle_end': config.get('cycle_end', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
-        'project_id': '85',
+        'project_id': '196',
         'model_geometry': wkt_geometry,
         'model_class': building_type,
         'insert_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -310,21 +310,25 @@ def process_single_image(image_path, config):
     print(f"✓ Image is georeferenced - proceeding with analysis")
     
     try:
+        start_time = time.time()
         # Step 1: Generate predictions
         print("\nGenerating predictions...")
         use_rotation = config.get('use_rotation_tta', False)
-        if use_rotation:
-            print("Using rotation-based test-time augmentation (4 rotations: 0°, 90°, 180°, 270°)")
+        
         
         prediction, confidence = single_image_pred(
-            model_type='kfolds',
+            model_type='yolo',
             model_version='m',
             image_id=image_path,
             sliding_window=True,
             conf_threshold=0.4,
             output_dir=config['output_dir'],
-            use_rotation=use_rotation
+            use_rotation=use_rotation,
+            use_window_list=True
         )
+        end_time = time.time()
+        tot_time = end_time - start_time
+        print(f"Prediction generation took {tot_time:.2f} seconds")
         
         # Step 2: Visualize predictions
         print("\nCreating visualization...")
@@ -421,7 +425,7 @@ def process_single_image(image_path, config):
             geom = row.geometry  # Already in geographic coordinates from GeoJSON
             
             record = create_building_record(
-                geom, image_path, 'New', config
+                geom, image_path, 'new', config
             )
             new_buildings.append(record)
 
@@ -433,13 +437,13 @@ def process_single_image(image_path, config):
             geom = row.geometry  # Already in geographic coordinates from GeoJSON
             
             record = create_building_record(
-                geom, image_path, 'Removed', config
+                geom, image_path, 'removed', config
             )
             removed_buildings.append(record)
         
         print(f"\n✓ Successfully processed {image_path.name}")
         
-        return new_buildings, removed_buildings, total_count, True
+        return new_buildings, removed_buildings, total_count, True, tot_time
         
     except Exception as e:
         print(f"\n✗ Error processing {image_path.name}: {e}")
@@ -456,7 +460,8 @@ def main():
     print("="*80)
     
     # Get list of images to process
-    image_list = get_image_list(CONFIG['single_image'])
+    
+    image_list = get_image_list(CONFIG['input_images'])
     
     if not image_list:
         print("No images found to process!")
@@ -465,20 +470,21 @@ def main():
     print(f"\nFound {len(image_list)} image(s) to process")
     for img in image_list:
         print(f"  - {img.name}")
-    
     # Process each image
     all_new_buildings = []
     all_removed_buildings = []
     successful_images = []
     failed_images = []
-    
+    tot_time = []
     for image_path in image_list:
         output_path = Path(CONFIG['output_dir']) / f'sw_predictions_1024_0.5/'
         if output_path.exists():
             shutil.rmtree(output_path)
             print(f"Deleted existing prediction folder: {output_path}")
 
-        new_buildings, removed_buildings, total_count, success = process_single_image(image_path, CONFIG)
+        new_buildings, removed_buildings, total_count, success, img_time = process_single_image(image_path, CONFIG)
+
+        tot_time.append(img_time)
 
         if success:
             all_new_buildings.extend(new_buildings)
@@ -532,6 +538,7 @@ def main():
     print(f"Total images: {len(image_list)}")
     print(f"Successful: {len(successful_images)}")
     print(f"Failed: {len(failed_images)}")
+    print(f"Average processing time per image: {sum(tot_time)/len(tot_time):.2f} seconds")
     
     if failed_images:
         print("\nFailed images:")
