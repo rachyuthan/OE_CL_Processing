@@ -250,8 +250,6 @@ def rotate_valid_area_geometry(valid_area_gdf, angle, orig_width, orig_height, t
     # Step 2: Rotate the pixel coordinates
     # Step 3: Convert back to geographic using rotated transform
     
-    from shapely.geometry import Polygon, MultiPolygon
-    
     def rotate_geometry_pixels(geom, angle, orig_width, orig_height):
         """Rotate geometry in pixel space"""
         if geom.geom_type == 'Polygon':
@@ -338,7 +336,7 @@ def rotate_valid_area_geometry(valid_area_gdf, angle, orig_width, orig_height, t
     # Create rotated GeoDataFrame
     rotated_gdf = gpd.GeoDataFrame(geometry=rotated_geometries, crs=image_crs)
     
-    return rotated_gdf, rotated_transform, rotated_width, rotated_height
+    return rotated_gdf, rotated_transform
 
 # =============================================================
 # Functions for generating predictions
@@ -937,7 +935,7 @@ def sliding_window_detection_with_rotation(
             rot_height, rot_width = rotated_image.shape[:2]
             
             # Get rotated valid area geometry and transform
-            rotated_valid_area_gdf, rotated_transform, rot_width_check, rot_height_check = rotate_valid_area_geometry(
+            rotated_valid_area_gdf, rotated_transform = rotate_valid_area_geometry(
                 original_valid_area_gdf,
                 rotation_angle,
                 orig_width,
