@@ -86,15 +86,218 @@ def process_file(file_path, img_width, img_height):
 
 
 
-autosplit_train = Path('/cephfs/work/rithvik/datasets/datasets/NatCombined/images/autosplit_train.txt')
-autosplit_val = Path('/cephfs/work/rithvik/datasets/datasets/NatCombined/images/autosplit_val.txt')
-if not autosplit_train.exists() or not autosplit_val.exists():
-    images = Path('/cephfs/work/rithvik/datasets/datasets/NatCombined/images')
+# ============================================================================
+# CONFIGURATION - Update these paths for your dataset
+# ============================================================================
+CONFIG = {
+    "dataset_name": "Maxar_images-skysat_combined",  # Name for your dataset
+    # Option 1: Single directory (original behavior)
+    # "images_dir": "/cephfs/work/rithvik/datasets/datasets/BHE/Maxar_images_cropped/images/",
+    # "labels_dir": "/cephfs/work/rithvik/datasets/datasets/BHE/Maxar_images_cropped/labels/",
+    
+    # Option 2: Multiple directories (comment out images_dir/labels_dir above and use this)
+    "datasets": [
+        {
+            "images": "/cephfs/work/rithvik/datasets/datasets/BHE/Maxar_images_cropped/images/",
+            "labels": "/cephfs/work/rithvik/datasets/datasets/BHE/Maxar_images_cropped/labels/",
+        },
+        {
+            "images": "/cephfs/work/rithvik/datasets/datasets/Sept2025Dataset/images/",
+            "labels": "/cephfs/work/rithvik/datasets/datasets/Sept2025Dataset/labels/",
+        },
+    ],
+    
+    "dataset_root": "/cephfs/work/rithvik/datasets/datasets/BHE/Maxar_images_skysat_combined",  # Where YAML will be saved
+    "split_weights": (0.85, 0.15, 0.00),  # train, val, test split ratios
+    "num_classes": 1,  # Number of classes in your dataset
+    "class_names": ["building"],  # List of class names
+}
+# ============================================================================
 
-    # Split
-    autosplit(images, weights=(0.7, 0.15, 0.15))
+def create_dataset_yaml(config):
+    """Create YAML file for YOLO training"""
+    dataset_root = Path(config["dataset_root"])
+    yaml_path = dataset_root / "dataset.yaml"
+    
+    # Create names dictionary with index mapping (e.g., {0: 'building', 1: 'car'})
+    names_dict = {i: name for i, name in enumerate(config["class_names"])}
+    
+    # Create YAML content
+    yaml_content = {
+        "path": str(dataset_root.absolute()),
+        "train": "autosplit_train.txt",
+        "val": "autosplit_val.txt",
+    }
+    
+    # Add test split if it exists
+    if config["split_weights"][2] > 0:
+        yaml_content["test"] = "autosplit_test.txt"
+    
+    # Add names mapping
+    yaml_content["names"] = names_dict
+    
+    # Write YAML file with custom formatting to match YOLO format
+    with open(yaml_path, 'w') as f:
+        f.write(f"path: {yaml_content['path']}\n")
+        f.write(f"train: {yaml_content['train']}\n")
+        f.write(f"val: {yaml_content['val']}\n")
+        if "test" in yaml_content:
+            f.write(f"test: {yaml_content['test']}\n")
+        f.write("names:\n")
+        for idx, name in names_dict.items():
+            f.write(f"  {idx}: {name}\n")
+    
+    print(f"Created dataset YAML file: {yaml_path}")
+    return yaml_path
+
+def collect_image_paths(config):
+    """Collect all image paths from single or multiple dataset directories"""
+    image_paths = []
+    
+    # Check if using single directory (old format) or multiple directories
+    if "images_dir" in config:
+        # Single directory mode
+        images_dir = Path(config["images_dir"])
+        labels_dir = Path(config["labels_dir"])
+        
+        if not images_dir.exists():
+            print(f"ERROR: Images directory does not exist: {images_dir}")
+            exit(1)
+        if not labels_dir.exists():
+            print(f"ERROR: Labels directory does not exist: {labels_dir}")
+            exit(1)
+        
+        # Collect all image files
+        for ext in ['*.jpg', '*.jpeg', '*.png', '*.tif', '*.tiff']:
+            image_paths.extend(images_dir.glob(ext))
+        
+        print(f"Found {len(image_paths)} images in: {images_dir}")
+        
+    elif "datasets" in config:
+        # Multiple directories mode
+        for i, dataset in enumerate(config["datasets"], 1):
+            images_dir = Path(dataset["images"])
+            labels_dir = Path(dataset["labels"])
+            
+            if not images_dir.exists():
+                print(f"ERROR: Images directory {i} does not exist: {images_dir}")
+                exit(1)
+            if not labels_dir.exists():
+                print(f"ERROR: Labels directory {i} does not exist: {labels_dir}")
+                exit(1)
+            
+            # Collect all image files from this dataset
+            dataset_images = []
+            for ext in ['*.jpg', '*.jpeg', '*.png', '*.tif', '*.tiff']:
+                dataset_images.extend(images_dir.glob(ext))
+            
+            image_paths.extend(dataset_images)
+            print(f"Found {len(dataset_images)} images in dataset {i}: {images_dir}")
+        
+        print(f"Total images across all datasets: {len(image_paths)}")
+    else:
+        print("ERROR: Config must contain either 'images_dir' or 'datasets'")
+        exit(1)
+    
+    return image_paths
+
+def create_custom_autosplit(image_paths, dataset_root, weights=(0.8, 0.1, 0.1)):
+    """Create autosplit files from a list of image paths"""
+    import random
+    
+    # Shuffle images
+    random.seed(42)  # For reproducibility
+    image_paths = list(image_paths)
+    random.shuffle(image_paths)
+    
+    # Calculate split indices
+    n = len(image_paths)
+    train_split = int(n * weights[0])
+    val_split = int(n * (weights[0] + weights[1]))
+    
+    # Split the data
+    train_images = image_paths[:train_split]
+    val_images = image_paths[train_split:val_split]
+    test_images = image_paths[val_split:]
+    
+    # Write autosplit files
+    autosplit_train = dataset_root / "autosplit_train.txt"
+    autosplit_val = dataset_root / "autosplit_val.txt"
+    autosplit_test = dataset_root / "autosplit_test.txt"
+    
+    with open(autosplit_train, 'w') as f:
+        for img in train_images:
+            f.write(f"{img.absolute()}\n")
+    
+    with open(autosplit_val, 'w') as f:
+        for img in val_images:
+            f.write(f"{img.absolute()}\n")
+    
+    if len(test_images) > 0:
+        with open(autosplit_test, 'w') as f:
+            for img in test_images:
+                f.write(f"{img.absolute()}\n")
+    
+    print(f"✓ Created autosplit files:")
+    print(f"  Train: {len(train_images)} images")
+    print(f"  Val: {len(val_images)} images")
+    print(f"  Test: {len(test_images)} images")
+
+# Create dataset root directory if it doesn't exist
+dataset_root = Path(CONFIG["dataset_root"])
+dataset_root.mkdir(parents=True, exist_ok=True)
+
+# Define autosplit file paths
+autosplit_train = dataset_root / "autosplit_train.txt"
+autosplit_val = dataset_root / "autosplit_val.txt"
+autosplit_test = dataset_root / "autosplit_test.txt"
+
+# Perform autosplit if needed
+if not autosplit_train.exists() or not autosplit_val.exists():
+    print("Creating train/val split...")
+    
+    # Collect all image paths
+    image_paths = collect_image_paths(CONFIG)
+    
+    if len(image_paths) == 0:
+        print("ERROR: No images found!")
+        exit(1)
+    
+    # Create custom autosplit
+    create_custom_autosplit(image_paths, dataset_root, weights=CONFIG["split_weights"])
+    print("✓ Train/val split completed")
 else:
-    print("autosplit_train.txt and autosplit_val.txt already exist. Skipping conversion and splitting.")
+    print("✓ Autosplit files already exist. Skipping splitting.")
+
+# Create YAML file
+yaml_path = create_dataset_yaml(CONFIG)
+
+print("\n" + "="*70)
+print("DATASET CONFIGURATION")
+print("="*70)
+print(f"Dataset name: {CONFIG['dataset_name']}")
+if "images_dir" in CONFIG:
+    print(f"Images: {CONFIG['images_dir']}")
+    print(f"Labels: {CONFIG['labels_dir']}")
+elif "datasets" in CONFIG:
+    print(f"Multiple datasets ({len(CONFIG['datasets'])}):")
+    for i, ds in enumerate(CONFIG['datasets'], 1):
+        print(f"  Dataset {i}:")
+        print(f"    Images: {ds['images']}")
+        print(f"    Labels: {ds['labels']}")
+print(f"Dataset root: {dataset_root}")
+print(f"YAML file: {yaml_path}")
+print(f"Number of classes: {CONFIG['num_classes']}")
+print(f"Class names: {CONFIG['class_names']}")
+print("="*70)
+
+print("\nContinue with training? (y/n):")
+cont = input().strip().lower()
+if cont == 'n':
+    print("Exiting.")
+    exit(0)
+else:
+    print("Continuing to training...")
 
 def get_dataset_path(yaml_path):
     """Extract datset paths from config file"""
@@ -147,15 +350,12 @@ def calculate_dataset_mean_std(yaml_path, train=True):
 
 # Train the model
 
-model = YOLO('yolo11m.pt')   # switch to whichever YOLO model from worst to best (n, s, m, l, x) 
-# hyp = {
+model = YOLO('pre_trained/weights/best.pt')   # switch to whichever YOLO model from worst to best (n, s, m, l, x) 
 
-# }
-
-results = model.train(data='./YOLO/combined.yaml', 
-                      epochs=100, batch=1, imgsz=1024, 
-                      workers=16, scale=0.1, project='./pre_trained/', 
-                      name='xView_combined', resume=False) # This does both training and validation but model.val can also be used to validate the model
+results = model.train(data=str(yaml_path), 
+                      epochs=200, batch=4, imgsz=1024, 
+                      workers=16, scale=0.1, project='./Maxar_skysat_combined/', 
+                      name=CONFIG['dataset_name'], resume=False) # This does both training and validation but model.val can also be used to validate the model
 
 
 # model = RTDETR('/home/rithvik/YOLO/test_runs/detect/xView_combined_DETR4/weights/last.pt')
